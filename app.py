@@ -15,8 +15,36 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 import os
 
-# Configurar el locale para español
-locale.setlocale(locale.LC_ALL, 'es_ES.UTF-8')
+# Configuración de locale para fechas en español
+try:
+    locale.setlocale(locale.LC_ALL, 'es_ES.UTF-8')
+except locale.Error:
+    try:
+        locale.setlocale(locale.LC_ALL, 'es_CL.UTF-8')  # Intentar con locale chileno
+    except locale.Error:
+        try:
+            locale.setlocale(locale.LC_ALL, 'es_ES')  # Intentar sin UTF-8
+        except locale.Error:
+            # Si nada funciona, definimos los meses manualmente
+            MESES = {
+                1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril',
+                5: 'Mayo', 6: 'Junio', 7: 'Julio', 8: 'Agosto',
+                9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre'
+            }
+            
+            def obtener_nombre_mes(numero_mes):
+                return MESES.get(numero_mes, '')
+
+# Función para obtener el nombre del mes
+def obtener_nombre_mes(numero_mes):
+    try:
+        # Crear una fecha con el mes deseado
+        fecha = datetime(2000, numero_mes, 1)
+        # Obtener el nombre del mes en español
+        return fecha.strftime('%B').capitalize()
+    except:
+        # Si falla, usar el diccionario de respaldo
+        return MESES.get(numero_mes, '')
 
 app = Flask(__name__)
 DB_PATH = "asistencia_multiples_cursos.db"
@@ -119,7 +147,7 @@ def asistencia(curso_id):
     conn.close()
     
     # Obtener el nombre del mes en español
-    mes_nombre = calendar.month_name[month].capitalize()
+    mes_nombre = obtener_nombre_mes(month)
     
     return render_template('asistencia.html', 
                          curso=curso, 
@@ -238,7 +266,7 @@ def generar_pdf(curso_id, mes, año):
         <b>La Serena</b><br/>
         <font size=10>Reporte de Asistencia - {mes} {año}</font>
         </para>
-    """.format(mes=mes, año=año), header_style)
+    """.format(mes=obtener_nombre_mes(mes), año=año), header_style)
 
     # Tabla de encabezado con logo y texto
     header_table = Table([[logo_img, header_text]], colWidths=[60, None])
@@ -376,7 +404,7 @@ def export_pdf(curso_id):
     # Obtener el mes actual o el especificado
     month = request.args.get('month', type=int, default=date.today().month)
     year = request.args.get('year', type=int, default=date.today().year)
-    mes_nombre = calendar.month_name[month].capitalize()
+    mes_nombre = obtener_nombre_mes(month)
     
     pdf = generar_pdf(curso_id, month, year)
     
