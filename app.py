@@ -463,5 +463,5 @@ if __name__ == '__main__':
     # Create static folder if it doesn't exist
     if not os.path.exists('static'):
         os.makedirs('static')
-    port = int(os.environ.get('PORT', 5005))
+    port = int(os.environ.get('PORT', 8080))  # Cambiado a 8080 como puerto por defecto
     app.run(host='0.0.0.0', port=port, debug=False)
