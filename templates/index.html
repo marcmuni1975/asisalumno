@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistema de Asistencia 2025</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        .course-card {
+            transition: transform 0.3s;
+        }
+        .course-card:hover {
+            transform: translateY(-5px);
+        }
+        .btn-float {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            font-size: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+        <div class="container">
+            <a class="navbar-brand" href="/">Sistema de Asistencia 2025</a>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <div class="row mb-4">
+            <div class="col">
+                <h2>Gestión de Cursos</h2>
+            </div>
+        </div>
+
+        <!-- Lista de cursos -->
+        <div class="row row-cols-1 row-cols-md-3 g-4">
+            {% for curso in cursos %}
+            <div class="col">
+                <div class="card h-100 course-card">
+                    <div class="card-body">
+                        <h5 class="card-title">{{ curso.nombre }}</h5>
+                        <p class="card-text">
+                            <small class="text-muted">Año: {{ curso.año }}</small>
+                        </p>
+                        <div class="btn-group w-100">
+                            <a href="{{ url_for('asistencia', curso_id=curso.id) }}" class="btn btn-primary">
+                                <i class="bi bi-calendar-check"></i> Asistencia
+                            </a>
+                            <a href="{{ url_for('dashboard', curso_id=curso.id) }}" class="btn btn-info text-white">
+                                <i class="bi bi-graph-up"></i> Dashboard
+                            </a>
+                            <a href="{{ url_for('gestionar_alumnos', id=curso.id) }}" class="btn btn-success">
+                                <i class="bi bi-people"></i> Alumnos
+                            </a>
+                            <button class="btn btn-warning" onclick="editarCurso({{ curso.id }}, '{{ curso.nombre }}', {{ curso.año }})">
+                                <i class="bi bi-pencil"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <!-- Botón flotante para agregar curso -->
+        <button class="btn btn-success btn-float" onclick="agregarCurso()">
+            <i class="bi bi-plus"></i>
+        </button>
+    </div>
+
+    <!-- Modal para Agregar/Editar Curso -->
+    <div class="modal fade" id="cursoModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="modalTitle">Agregar Curso</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="cursoForm">
+                        <input type="hidden" id="cursoId" name="id">
+                        <div class="mb-3">
+                            <label for="nombre" class="form-label">Nombre del Curso</label>
+                            <input type="text" class="form-control" id="nombre" name="nombre" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="año" class="form-label">Año</label>
+                            <input type="number" class="form-control" id="año" name="año" 
+                                   value="2025" min="2020" max="2030" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="listaAlumnos" class="form-label">Lista de Alumnos (TXT)</label>
+                            <input type="file" class="form-control" id="listaAlumnos" accept=".txt">
+                            <small class="text-muted">Un nombre por línea</small>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="button" class="btn btn-primary" onclick="guardarCurso()">Guardar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let cursoModal;
+        
+        document.addEventListener('DOMContentLoaded', function() {
+            cursoModal = new bootstrap.Modal(document.getElementById('cursoModal'));
+        });
+
+        function agregarCurso() {
+            document.getElementById('cursoId').value = '';
+            document.getElementById('nombre').value = '';
+            document.getElementById('año').value = '2025';
+            document.getElementById('listaAlumnos').value = '';
+            document.getElementById('modalTitle').textContent = 'Agregar Curso';
+            cursoModal.show();
+        }
+
+        function editarCurso(id, nombre, año) {
+            document.getElementById('cursoId').value = id;
+            document.getElementById('nombre').value = nombre;
+            document.getElementById('año').value = año;
+            document.getElementById('listaAlumnos').value = '';
+            document.getElementById('modalTitle').textContent = 'Editar Curso';
+            cursoModal.show();
+        }
+
+        function guardarCurso() {
+            const formData = new FormData();
+            formData.append('id', document.getElementById('cursoId').value);
+            formData.append('nombre', document.getElementById('nombre').value);
+            formData.append('año', document.getElementById('año').value);
+            
+            const listaAlumnos = document.getElementById('listaAlumnos').files[0];
+            if (listaAlumnos) {
+                formData.append('lista_alumnos', listaAlumnos);
+            }
+
+            fetch('/guardar_curso', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    location.reload();
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            })
+            .catch(error => {
+                alert('Error al guardar el curso: ' + error);
+            });
+        }
+    </script>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

@@ -1,0 +1,6 @@
+Flask==3.0.2
+reportlab==4.1.0
+matplotlib==3.10.1
+SQLAlchemy==2.0.28
+python-dateutil==2.9.0
+Werkzeug==3.0.1
