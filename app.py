@@ -654,3 +654,10 @@ if not os.path.exists('static'):
 # Configurar el puerto
 port = int(os.environ.get('PORT', 8080))
 logger.info(f'Aplicación configurada para usar puerto {port}')
+
+if __name__ == '__main__':
+    # Create static folder if it doesn't exist
+    if not os.path.exists('static'):
+        os.makedirs('static')
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port)
