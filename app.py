@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for, session, flash
 from datetime import datetime, date
 import sqlite3
 import calendar
@@ -14,6 +14,8 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 import os
+from werkzeug.security import generate_password_hash, check_password_hash
+from functools import wraps
 
 # Configuración de locale para fechas en español
 try:
@@ -47,7 +49,92 @@ def obtener_nombre_mes(numero_mes):
         return MESES.get(numero_mes, '')
 
 app = Flask(__name__)
+app.secret_key = os.urandom(24)  # Clave secreta para las sesiones
 DB_PATH = "asistencia_multiples_cursos.db"
+
+# Decorator para requerir autenticación
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'user_id' not in session:
+            flash('Por favor inicia sesión para acceder', 'error')
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+# Decorator para requerir rol de administrador
+def admin_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'user_role' not in session or session['user_role'] != 'admin':
+            flash('No tienes permisos para acceder a esta función', 'error')
+            return redirect(url_for('index'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        user = c.execute('SELECT id, password, rol FROM usuarios WHERE username = ?', 
+                        (username,)).fetchone()
+        conn.close()
+        
+        if user and check_password_hash(user[1], password):
+            session['user_id'] = user[0]
+            session['username'] = username
+            session['user_role'] = user[2]
+            return redirect(url_for('index'))
+        
+        flash('Usuario o contraseña incorrectos', 'error')
+    return render_template('login.html')
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('login'))
+
+@app.route('/register', methods=['GET', 'POST'])
+@admin_required
+def register():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        nombre = request.form['nombre']
+        rol = request.form['rol']
+        
+        if session['user_role'] != 'admin':
+            flash('No tienes permisos para crear usuarios', 'error')
+            return redirect(url_for('index'))
+        
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute('INSERT INTO usuarios (username, password, nombre, rol) VALUES (?, ?, ?, ?)',
+                     (username, generate_password_hash(password), nombre, rol))
+            conn.commit()
+            conn.close()
+            flash('Usuario creado exitosamente', 'success')
+            return redirect(url_for('admin_panel'))
+        except sqlite3.IntegrityError:
+            flash('El nombre de usuario ya existe', 'error')
+        except Exception as e:
+            flash('Error al crear usuario', 'error')
+            
+    return render_template('register.html')
+
+@app.route('/admin')
+@admin_required
+def admin_panel():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    users = c.execute('SELECT id, username, nombre, rol, created_at FROM usuarios').fetchall()
+    conn.close()
+    return render_template('admin.html', users=users)
 
 def get_db_connection():
     conn = sqlite3.connect(DB_PATH)
@@ -55,6 +142,7 @@ def get_db_connection():
     return conn
 
 @app.route('/')
+@login_required
 def index():
     conn = get_db_connection()
     cursos = conn.execute('SELECT * FROM cursos ORDER BY nombre').fetchall()
@@ -62,6 +150,7 @@ def index():
     return render_template('index.html', cursos=cursos)
 
 @app.route('/curso/<int:id>')
+@login_required
 def get_curso(id):
     conn = get_db_connection()
     curso = conn.execute('SELECT * FROM cursos WHERE id = ?', (id,)).fetchone()
@@ -75,6 +164,7 @@ def get_curso(id):
     return jsonify({'error': 'Curso no encontrado'}), 404
 
 @app.route('/guardar_curso', methods=['POST'])
+@login_required
 def guardar_curso():
     try:
         curso_id = request.form.get('id')
@@ -114,6 +204,7 @@ def guardar_curso():
         return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/asistencia/<int:curso_id>')
+@login_required
 def asistencia(curso_id):
     conn = get_db_connection()
     curso = conn.execute('SELECT * FROM cursos WHERE id = ?', (curso_id,)).fetchone()
@@ -160,6 +251,7 @@ def asistencia(curso_id):
                          calendar=calendar)
 
 @app.route('/dashboard/<int:curso_id>')
+@login_required
 def dashboard(curso_id):
     conn = get_db_connection()
     curso = conn.execute('SELECT * FROM cursos WHERE id = ?', (curso_id,)).fetchone()
@@ -207,6 +299,7 @@ def dashboard(curso_id):
                          alumnos_data=alumnos_data)
 
 @app.route('/save_attendance', methods=['POST'])
+@login_required
 def save_attendance():
     data = request.json
     conn = get_db_connection()
@@ -397,6 +490,7 @@ def generar_pdf(curso_id, mes, año):
     return pdf
 
 @app.route('/export_pdf/<int:curso_id>')
+@login_required
 def export_pdf(curso_id):
     conn = get_db_connection()
     curso = conn.execute('SELECT * FROM cursos WHERE id = ?', (curso_id,)).fetchone()
@@ -417,6 +511,7 @@ def export_pdf(curso_id):
     )
 
 @app.route('/curso/<int:id>/alumnos')
+@login_required
 def gestionar_alumnos(id):
     conn = get_db_connection()
     curso = conn.execute('SELECT * FROM cursos WHERE id = ?', (id,)).fetchone()
@@ -425,6 +520,7 @@ def gestionar_alumnos(id):
     return render_template('alumnos.html', curso=curso, alumnos=alumnos)
 
 @app.route('/actualizar_alumno', methods=['POST'])
+@login_required
 def actualizar_alumno():
     try:
         data = request.json
@@ -438,6 +534,7 @@ def actualizar_alumno():
         return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/eliminar_alumno', methods=['POST'])
+@login_required
 def eliminar_alumno():
     try:
         data = request.json
@@ -453,6 +550,7 @@ def eliminar_alumno():
         return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/agregar_alumno', methods=['POST'])
+@login_required
 def agregar_alumno():
     try:
         data = request.json
@@ -466,6 +564,7 @@ def agregar_alumno():
         return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/importar_alumnos', methods=['POST'])
+@login_required
 def importar_alumnos():
     try:
         curso_id = request.form.get('curso_id')
