@@ -54,6 +54,8 @@ def obtener_nombre_mes(numero_mes):
         return MESES.get(numero_mes, '')
 
 app = Flask(__name__)
+app.config['ENV'] = os.environ.get('FLASK_ENV', 'production')
+app.config['DEBUG'] = False
 app.secret_key = os.environ.get('SECRET_KEY', os.urandom(24))  # Usar variable de entorno o generar una clave
 DB_PATH = "asistencia_multiples_cursos.db"
 
