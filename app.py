@@ -68,13 +68,27 @@ app.config['ENV'] = 'production'
 app.config['DEBUG'] = False
 
 # Configuración de la base de datos
-DB_PATH = "asistencia_multiples_cursos.db"
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "asistencia_multiples_cursos.db")
 
 # Asegurarse de que existan las carpetas necesarias
 for folder in ['static', 'templates']:
     if not os.path.exists(folder):
         os.makedirs(folder)
         logger.info(f'Carpeta {folder} creada')
+
+# Asegurarse que el directorio de la base de datos tenga permisos de escritura
+db_dir = os.path.dirname(DB_PATH)
+if not os.path.exists(db_dir):
+    os.makedirs(db_dir)
+    logger.info(f'Directorio de base de datos creado: {db_dir}')
+
+# Verificar permisos de escritura
+try:
+    with open(DB_PATH, 'a'):
+        pass
+    logger.info('Permisos de escritura verificados para la base de datos')
+except IOError as e:
+    logger.error(f'Error de permisos en la base de datos: {str(e)}')
 
 @app.route('/')
 def root():
@@ -407,22 +421,35 @@ def dashboard(curso_id):
 @login_required
 def save_attendance():
     data = request.json
-    conn = get_db_connection()
+    if not data or 'attendance' not in data:
+        logger.error('Datos de asistencia no recibidos correctamente')
+        return jsonify({'success': False, 'error': 'Datos de asistencia no válidos'})
     
+    conn = None
     try:
+        conn = get_db_connection()
         for alumno_id, fechas in data['attendance'].items():
             for fecha, presente in fechas.items():
-                conn.execute('''
-                    INSERT OR REPLACE INTO asistencia (id_alumno, fecha, presente)
-                    VALUES (?, ?, ?)
-                ''', (int(alumno_id), fecha, presente))
+                try:
+                    conn.execute('''
+                        INSERT OR REPLACE INTO asistencia (id_alumno, fecha, presente)
+                        VALUES (?, ?, ?)
+                    ''', (int(alumno_id), fecha, presente))
+                    logger.info(f'Asistencia guardada: alumno={alumno_id}, fecha={fecha}, presente={presente}')
+                except sqlite3.Error as e:
+                    logger.error(f'Error al guardar asistencia individual: {str(e)}')
+                    raise
         conn.commit()
-        conn.close()
+        logger.info('Todas las asistencias guardadas correctamente')
         return jsonify({'success': True})
     except Exception as e:
-        conn.rollback()
-        conn.close()
+        logger.error(f'Error al guardar asistencia: {str(e)}')
+        if conn:
+            conn.rollback()
         return jsonify({'success': False, 'error': str(e)})
+    finally:
+        if conn:
+            conn.close()
 
 def generar_pdf(curso_id, mes, año):
     # Crear un buffer para el PDF
