@@ -116,7 +116,7 @@ def init_db():
     if not admin:
         try:
             from werkzeug.security import generate_password_hash
-            hashed_password = generate_password_hash('admin123', method='sha256')
+            hashed_password = generate_password_hash('admin123', method='pbkdf2:sha256')
             c.execute('''
             INSERT INTO usuarios (username, password, nombre, rol)
             VALUES (?, ?, ?, ?)
