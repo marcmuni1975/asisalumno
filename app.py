@@ -210,19 +210,51 @@ def get_db_connection():
 def root():
     try:
         logger.info('Accediendo a la ruta raíz')
-        if 'user_id' not in session:
-            logger.info('Usuario no autenticado, intentando mostrar login')
-            try:
-                return render_template('login.html')
-            except Exception as template_error:
-                logger.error(f'Error al renderizar login.html: {str(template_error)}')
-                return f'Error al renderizar login.html: {str(template_error)}', 500
-        logger.info('Usuario autenticado, redirigiendo a index')
-        return redirect(url_for('index'))
+        return '''
+        <html>
+        <head>
+            <title>Login</title>
+            <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+        </head>
+        <body class="bg-light">
+            <div class="container mt-5">
+                <div class="row justify-content-center">
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header">
+                                <h3 class="text-center">Iniciar Sesión</h3>
+                            </div>
+                            <div class="card-body">
+                                <form method="POST" action="/login">
+                                    <div class="mb-3">
+                                        <label for="username" class="form-label">Usuario</label>
+                                        <input type="text" class="form-control" id="username" name="username" required>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="password" class="form-label">Contraseña</label>
+                                        <input type="password" class="form-control" id="password" name="password" required>
+                                    </div>
+                                    <div class="d-grid">
+                                        <button type="submit" class="btn btn-primary">Iniciar Sesión</button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+        </body>
+        </html>
+        '''
     except Exception as e:
         error_msg = f'Error en ruta raíz: {str(e)}'
         logger.error(error_msg)
         return error_msg, 500
+
+@app.route('/test')
+def test():
+    return 'Prueba de ruta - Si ves esto, Flask está funcionando correctamente'
 
 @app.route('/dashboard')
 @login_required
