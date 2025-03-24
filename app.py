@@ -49,8 +49,44 @@ def obtener_nombre_mes(numero_mes):
         return MESES.get(numero_mes, '')
 
 app = Flask(__name__)
-app.secret_key = os.urandom(24)  # Clave secreta para las sesiones
+app.secret_key = os.environ.get('SECRET_KEY', os.urandom(24))  # Usar variable de entorno o generar una clave
 DB_PATH = "asistencia_multiples_cursos.db"
+
+# Asegurarse de que la tabla de usuarios existe al iniciar la aplicación
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    # Crear tabla de usuarios si no existe
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS usuarios (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE NOT NULL,
+        password TEXT NOT NULL,
+        nombre TEXT NOT NULL,
+        rol TEXT CHECK(rol IN ('admin', 'usuario')) NOT NULL DEFAULT 'usuario',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    ''')
+    
+    # Verificar si existe un administrador
+    admin = c.execute('SELECT id FROM usuarios WHERE rol = "admin" LIMIT 1').fetchone()
+    
+    # Si no hay admin, crear uno por defecto
+    if not admin:
+        try:
+            c.execute('''
+            INSERT INTO usuarios (username, password, nombre, rol)
+            VALUES (?, ?, ?, ?)
+            ''', ('admin', generate_password_hash('admin123'), 'Administrador', 'admin'))
+            conn.commit()
+        except sqlite3.IntegrityError:
+            pass  # Si ya existe el usuario, ignorar el error
+    
+    conn.close()
+
+# Inicializar la base de datos al arrancar
+init_db()
 
 # Decorator para requerir autenticación
 def login_required(f):
