@@ -1,8 +1,7 @@
 Flask==2.0.1
-Werkzeug==2.0.1
-matplotlib==3.4.3
-reportlab==3.6.2
-SQLAlchemy==2.0.28
-python-dateutil==2.9.0
 gunicorn==21.2.0
+matplotlib==3.7.1
+numpy==1.24.3
+reportlab==4.0.4
+Werkzeug==2.0.1
 python-dotenv==1.0.0

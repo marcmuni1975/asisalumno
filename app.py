@@ -3,16 +3,6 @@ from datetime import datetime, date
 import sqlite3
 import calendar
 import locale
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-from io import BytesIO
-import base64
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import inch
 import os
 import logging
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -21,6 +11,20 @@ from functools import wraps
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Configuración de matplotlib (debe ir antes de importar matplotlib)
+import matplotlib
+matplotlib.use('Agg')  # Usar el backend 'Agg' que no requiere GUI
+import matplotlib.pyplot as plt
+from io import BytesIO
+import base64
+
+# Importaciones para reportlab
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
 
 # Configuración de locale para fechas en español
 try:
@@ -57,9 +61,13 @@ app = Flask(__name__,
           static_folder='static',
           static_url_path='/static',
           template_folder='templates')
-app.config['ENV'] = os.environ.get('FLASK_ENV', 'production')
+
+# Configuración de seguridad
+app.secret_key = os.environ.get('SECRET_KEY', 'tu_clave_secreta_aqui')  # Asegúrate de configurar SECRET_KEY en Railway
+app.config['ENV'] = 'production'
 app.config['DEBUG'] = False
-app.secret_key = os.environ.get('SECRET_KEY', os.urandom(24))  # Usar variable de entorno o generar una clave
+
+# Configuración de la base de datos
 DB_PATH = "asistencia_multiples_cursos.db"
 
 # Asegurarse de que existan las carpetas necesarias
@@ -67,6 +75,20 @@ for folder in ['static', 'templates']:
     if not os.path.exists(folder):
         os.makedirs(folder)
         logger.info(f'Carpeta {folder} creada')
+
+@app.route('/')
+def root():
+    try:
+        logger.info('Accediendo a la ruta raíz')
+        if 'user_id' not in session:
+            logger.info('Usuario no autenticado, redirigiendo a login')
+            return render_template('login.html')
+        logger.info('Usuario autenticado, redirigiendo a index')
+        return redirect(url_for('index'))
+    except Exception as e:
+        error_msg = f'Error en ruta raíz: {str(e)}'
+        logger.error(error_msg)
+        return error_msg, 500
 
 # Asegurarse de que la tabla de usuarios existe al iniciar la aplicación
 def init_db():
@@ -205,10 +227,6 @@ def get_db_connection():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
-
-@app.route('/')
-def root():
-    return 'Sistema de Asistencia - Si ves esto, la aplicación está funcionando'
 
 @app.route('/test')
 def test():
