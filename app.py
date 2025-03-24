@@ -53,11 +53,20 @@ def obtener_nombre_mes(numero_mes):
         # Si falla, usar el diccionario de respaldo
         return MESES.get(numero_mes, '')
 
-app = Flask(__name__)
+app = Flask(__name__,
+          static_folder='static',
+          static_url_path='/static',
+          template_folder='templates')
 app.config['ENV'] = os.environ.get('FLASK_ENV', 'production')
 app.config['DEBUG'] = False
 app.secret_key = os.environ.get('SECRET_KEY', os.urandom(24))  # Usar variable de entorno o generar una clave
 DB_PATH = "asistencia_multiples_cursos.db"
+
+# Asegurarse de que existan las carpetas necesarias
+for folder in ['static', 'templates']:
+    if not os.path.exists(folder):
+        os.makedirs(folder)
+        logger.info(f'Carpeta {folder} creada')
 
 # Asegurarse de que la tabla de usuarios existe al iniciar la aplicación
 def init_db():
@@ -202,13 +211,18 @@ def root():
     try:
         logger.info('Accediendo a la ruta raíz')
         if 'user_id' not in session:
-            logger.info('Usuario no autenticado, redirigiendo a login')
-            return render_template('login.html')
+            logger.info('Usuario no autenticado, intentando mostrar login')
+            try:
+                return render_template('login.html')
+            except Exception as template_error:
+                logger.error(f'Error al renderizar login.html: {str(template_error)}')
+                return f'Error al renderizar login.html: {str(template_error)}', 500
         logger.info('Usuario autenticado, redirigiendo a index')
         return redirect(url_for('index'))
     except Exception as e:
-        logger.error(f'Error en ruta raíz: {str(e)}')
-        return f'Error: {str(e)}', 500
+        error_msg = f'Error en ruta raíz: {str(e)}'
+        logger.error(error_msg)
+        return error_msg, 500
 
 @app.route('/dashboard')
 @login_required
@@ -654,10 +668,6 @@ def importar_alumnos():
             return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
-
-# Asegurarse de que la carpeta static existe
-if not os.path.exists('static'):
-    os.makedirs('static')
 
 # Configurar el puerto
 port = int(os.environ.get('PORT', 8080))
