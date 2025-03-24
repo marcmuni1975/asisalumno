@@ -122,28 +122,32 @@ def admin_required(f):
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    logger.info('Accediendo a la página de login')
-    if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
-        logger.info(f'Intento de login para usuario: {username}')
-        
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        user = c.execute('SELECT id, password, rol FROM usuarios WHERE username = ?', 
-                        (username,)).fetchone()
-        conn.close()
-        
-        if user and check_password_hash(user[1], password):
-            session['user_id'] = user[0]
-            session['username'] = username
-            session['user_role'] = user[2]
-            logger.info(f'Login exitoso para usuario: {username} con rol: {user[2]}')
-            return redirect(url_for('index'))
-        
-        logger.warning(f'Login fallido para usuario: {username}')
-        flash('Usuario o contraseña incorrectos', 'error')
-    return render_template('login.html')
+    try:
+        logger.info('Accediendo a la página de login')
+        if request.method == 'POST':
+            username = request.form['username']
+            password = request.form['password']
+            logger.info(f'Intento de login para usuario: {username}')
+            
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            user = c.execute('SELECT id, password, rol FROM usuarios WHERE username = ?', 
+                            (username,)).fetchone()
+            conn.close()
+            
+            if user and check_password_hash(user[1], password):
+                session['user_id'] = user[0]
+                session['username'] = username
+                session['user_role'] = user[2]
+                logger.info(f'Login exitoso para usuario: {username} con rol: {user[2]}')
+                return redirect(url_for('index'))
+            
+            logger.warning(f'Login fallido para usuario: {username}')
+            flash('Usuario o contraseña incorrectos', 'error')
+        return render_template('login.html')
+    except Exception as e:
+        logger.error(f'Error en login: {str(e)}')
+        return f'Error: {str(e)}', 500
 
 @app.route('/logout')
 def logout():
@@ -195,12 +199,16 @@ def get_db_connection():
 
 @app.route('/')
 def root():
-    logger.info('Accediendo a la ruta raíz')
-    if 'user_id' not in session:
-        logger.info('Usuario no autenticado, redirigiendo a login')
-        return redirect(url_for('login'))
-    logger.info('Usuario autenticado, redirigiendo a index')
-    return redirect(url_for('index'))
+    try:
+        logger.info('Accediendo a la ruta raíz')
+        if 'user_id' not in session:
+            logger.info('Usuario no autenticado, redirigiendo a login')
+            return render_template('login.html')
+        logger.info('Usuario autenticado, redirigiendo a index')
+        return redirect(url_for('index'))
+    except Exception as e:
+        logger.error(f'Error en ruta raíz: {str(e)}')
+        return f'Error: {str(e)}', 500
 
 @app.route('/dashboard')
 @login_required
