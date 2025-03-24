@@ -645,7 +645,10 @@ def importar_alumnos():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 8080))
-    logger.info(f'Iniciando aplicación en puerto {port}')
-    app.run(host='0.0.0.0', port=port)
+# Asegurarse de que la carpeta static existe
+if not os.path.exists('static'):
+    os.makedirs('static')
+
+# Configurar el puerto
+port = int(os.environ.get('PORT', 8080))
+logger.info(f'Aplicación configurada para usar puerto {port}')
