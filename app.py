@@ -208,49 +208,7 @@ def get_db_connection():
 
 @app.route('/')
 def root():
-    try:
-        logger.info('Accediendo a la ruta raíz')
-        return '''
-        <html>
-        <head>
-            <title>Login</title>
-            <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
-        </head>
-        <body class="bg-light">
-            <div class="container mt-5">
-                <div class="row justify-content-center">
-                    <div class="col-md-6">
-                        <div class="card">
-                            <div class="card-header">
-                                <h3 class="text-center">Iniciar Sesión</h3>
-                            </div>
-                            <div class="card-body">
-                                <form method="POST" action="/login">
-                                    <div class="mb-3">
-                                        <label for="username" class="form-label">Usuario</label>
-                                        <input type="text" class="form-control" id="username" name="username" required>
-                                    </div>
-                                    <div class="mb-3">
-                                        <label for="password" class="form-label">Contraseña</label>
-                                        <input type="password" class="form-control" id="password" name="password" required>
-                                    </div>
-                                    <div class="d-grid">
-                                        <button type="submit" class="btn btn-primary">Iniciar Sesión</button>
-                                    </div>
-                                </form>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
-        </body>
-        </html>
-        '''
-    except Exception as e:
-        error_msg = f'Error en ruta raíz: {str(e)}'
-        logger.error(error_msg)
-        return error_msg, 500
+    return 'Sistema de Asistencia - Si ves esto, la aplicación está funcionando'
 
 @app.route('/test')
 def test():
