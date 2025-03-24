@@ -14,8 +14,13 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 import os
+import logging
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
+
+# Configurar logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Configuración de locale para fechas en español
 try:
@@ -54,6 +59,7 @@ DB_PATH = "asistencia_multiples_cursos.db"
 
 # Asegurarse de que la tabla de usuarios existe al iniciar la aplicación
 def init_db():
+    logger.info('Inicializando base de datos...')
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     
@@ -68,6 +74,7 @@ def init_db():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     ''')
+    logger.info('Tabla de usuarios verificada')
     
     # Verificar si existe un administrador
     admin = c.execute('SELECT id FROM usuarios WHERE rol = "admin" LIMIT 1').fetchone()
@@ -80,8 +87,11 @@ def init_db():
             VALUES (?, ?, ?, ?)
             ''', ('admin', generate_password_hash('admin123'), 'Administrador', 'admin'))
             conn.commit()
+            logger.info('Usuario administrador creado exitosamente')
         except sqlite3.IntegrityError:
-            pass  # Si ya existe el usuario, ignorar el error
+            logger.warning('Ya existe un usuario con el nombre admin')
+    else:
+        logger.info('Ya existe un usuario administrador')
     
     conn.close()
 
@@ -110,9 +120,11 @@ def admin_required(f):
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
+    logger.info('Accediendo a la página de login')
     if request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
+        logger.info(f'Intento de login para usuario: {username}')
         
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
@@ -124,8 +136,10 @@ def login():
             session['user_id'] = user[0]
             session['username'] = username
             session['user_role'] = user[2]
+            logger.info(f'Login exitoso para usuario: {username} con rol: {user[2]}')
             return redirect(url_for('index'))
         
+        logger.warning(f'Login fallido para usuario: {username}')
         flash('Usuario o contraseña incorrectos', 'error')
     return render_template('login.html')
 
@@ -179,8 +193,11 @@ def get_db_connection():
 
 @app.route('/')
 def root():
+    logger.info('Accediendo a la ruta raíz')
     if 'user_id' not in session:
+        logger.info('Usuario no autenticado, redirigiendo a login')
         return redirect(url_for('login'))
+    logger.info('Usuario autenticado, redirigiendo a index')
     return redirect(url_for('index'))
 
 @app.route('/dashboard')
@@ -629,8 +646,6 @@ def importar_alumnos():
         return jsonify({'success': False, 'error': str(e)})
 
 if __name__ == '__main__':
-    # Create static folder if it doesn't exist
-    if not os.path.exists('static'):
-        os.makedirs('static')
-    port = int(os.environ.get('PORT', 8080))  # Cambiado a 8080 como puerto por defecto
-    app.run(host='0.0.0.0', port=port, debug=False)
+    port = int(os.environ.get('PORT', 8080))
+    logger.info(f'Iniciando aplicación en puerto {port}')
+    app.run(host='0.0.0.0', port=port)
