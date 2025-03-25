@@ -11,6 +11,10 @@ from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import inch
+from io import BytesIO
+from reportlab.lib.enums import TA_LEFT, TA_CENTER
+from reportlab.platypus import Spacer, Image, ParagraphStyle
+from reportlab.lib.colors import Color
 
 # Configurar logging
 logging.basicConfig(
@@ -19,91 +23,109 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Definir la ruta de la base de datos
+if os.environ.get('RAILWAY_ENVIRONMENT'):
+    DB_PATH = '/data/asistencia_multiples_cursos.db'
+    # Asegurarse que el directorio /data existe
+    if not os.path.exists('/data'):
+        os.makedirs('/data')
+else:
+    DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'asistencia_multiples_cursos.db')
+
 def get_db_connection():
     """Obtiene una conexión a la base de datos SQLite"""
-    conn = sqlite3.connect('asistencia_multiples_cursos.db')
-    conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        return conn
+    except sqlite3.Error as e:
+        logger.error(f'Error al conectar a la base de datos: {str(e)}')
+        raise
 
 def init_db():
     """Inicializa la base de datos creando las tablas necesarias"""
-    logger.info('Inicializando base de datos...')
-    conn = get_db_connection()
-    c = conn.cursor()
+    logger.info(f'Inicializando base de datos en: {DB_PATH}')
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
 
-    # Crear tablas si no existen
-    c.executescript('''
-        CREATE TABLE IF NOT EXISTS usuarios (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL,
-            nombre TEXT NOT NULL,
-            rol TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
+        # Crear tablas si no existen
+        c.executescript('''
+            CREATE TABLE IF NOT EXISTS usuarios (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL,
+                nombre TEXT NOT NULL,
+                rol TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
 
-        CREATE TABLE IF NOT EXISTS cursos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nombre TEXT NOT NULL,
-            año INTEGER NOT NULL
-        );
+            CREATE TABLE IF NOT EXISTS cursos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nombre TEXT NOT NULL,
+                año INTEGER NOT NULL
+            );
 
-        CREATE TABLE IF NOT EXISTS alumnos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nombre TEXT NOT NULL,
-            id_curso INTEGER,
-            FOREIGN KEY (id_curso) REFERENCES cursos (id)
-        );
+            CREATE TABLE IF NOT EXISTS alumnos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nombre TEXT NOT NULL,
+                id_curso INTEGER,
+                FOREIGN KEY (id_curso) REFERENCES cursos (id)
+            );
 
-        CREATE TABLE IF NOT EXISTS asistencia (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            id_alumno INTEGER,
-            fecha TEXT NOT NULL,
-            presente BOOLEAN NOT NULL,
-            FOREIGN KEY (id_alumno) REFERENCES alumnos (id),
-            UNIQUE(id_alumno, fecha)
-        );
-    ''')
+            CREATE TABLE IF NOT EXISTS asistencia (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id_alumno INTEGER,
+                fecha TEXT NOT NULL,
+                presente BOOLEAN NOT NULL,
+                FOREIGN KEY (id_alumno) REFERENCES alumnos (id),
+                UNIQUE(id_alumno, fecha)
+            );
+        ''')
 
-    # Verificar si existe un usuario admin
-    admin = c.execute('SELECT * FROM usuarios WHERE username = ?', ('admin',)).fetchone()
-    if not admin:
-        # Crear usuario admin por defecto
-        c.execute(
-            'INSERT INTO usuarios (username, password, nombre, rol) VALUES (?, ?, ?, ?)',
-            ('admin', generate_password_hash('admin'), 'Administrador', 'admin')
-        )
-        logger.info('Usuario admin creado con éxito')
+        # Verificar si existe un usuario admin
+        admin = c.execute('SELECT * FROM usuarios WHERE username = ?', ('admin',)).fetchone()
+        if not admin:
+            # Crear usuario admin por defecto
+            c.execute(
+                'INSERT INTO usuarios (username, password, nombre, rol) VALUES (?, ?, ?, ?)',
+                ('admin', generate_password_hash('admin'), 'Administrador', 'admin')
+            )
+            logger.info('Usuario admin creado con éxito')
 
-    conn.commit()
-    conn.close()
-    logger.info('Base de datos inicializada correctamente')
+        conn.commit()
+        conn.close()
+        logger.info('Base de datos inicializada correctamente')
+    except Exception as e:
+        logger.error(f'Error al inicializar la base de datos: {str(e)}')
+        raise
 
 app = Flask(__name__,
           static_folder='static',
           static_url_path='/static',
           template_folder='templates')
 
-# Configuración de seguridad
-app.secret_key = os.environ.get('SECRET_KEY', 'tu_clave_secreta_aqui')  # Asegúrate de configurar SECRET_KEY en Railway
+# Configuración de la aplicación
+app.secret_key = os.environ.get('SECRET_KEY', 'tu_clave_secreta_aqui')
 app.config['ENV'] = 'production'
 app.config['DEBUG'] = False
 
 # Asegurarse de que existan las carpetas necesarias
 for folder in ['static', 'templates']:
-    if not os.path.exists(folder):
-        os.makedirs(folder)
-        logger.info(f'Carpeta {folder} creada')
+    folder_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), folder)
+    if not os.path.exists(folder_path):
+        os.makedirs(folder_path)
+        logger.info(f'Carpeta {folder} creada en {folder_path}')
 
-# Asegurarse que el directorio de la base de datos tenga permisos de escritura
-db_dir = os.path.dirname('asistencia_multiples_cursos.db')
+# Asegurarse que el directorio de la base de datos existe
+db_dir = os.path.dirname(os.path.abspath(DB_PATH))
 if not os.path.exists(db_dir):
     os.makedirs(db_dir)
     logger.info(f'Directorio de base de datos creado: {db_dir}')
 
 # Verificar permisos de escritura
 try:
-    with open('asistencia_multiples_cursos.db', 'a'):
+    with open(DB_PATH, 'a'):
         pass
     logger.info('Permisos de escritura verificados para la base de datos')
 except IOError as e:
