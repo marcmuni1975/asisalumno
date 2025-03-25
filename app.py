@@ -1,66 +1,83 @@
 from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for, session, flash
 from datetime import datetime, date
 import sqlite3
-import psycopg2
-from psycopg2.extras import DictCursor
 import calendar
-import locale
 import os
 import logging
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.units import inch
 
-# Configuración de logging
+# Configurar logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# Configuración de matplotlib (debe ir antes de importar matplotlib)
-import matplotlib
-matplotlib.use('Agg')  # Usar el backend 'Agg' que no requiere GUI
-import matplotlib.pyplot as plt
-from io import BytesIO
-import base64
+def get_db_connection():
+    """Obtiene una conexión a la base de datos SQLite"""
+    conn = sqlite3.connect('asistencia_multiples_cursos.db')
+    conn.row_factory = sqlite3.Row
+    return conn
 
-# Importaciones para reportlab
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import inch
+def init_db():
+    """Inicializa la base de datos creando las tablas necesarias"""
+    logger.info('Inicializando base de datos...')
+    conn = get_db_connection()
+    c = conn.cursor()
 
-# Configuración de locale para fechas en español
-try:
-    locale.setlocale(locale.LC_ALL, 'es_ES.UTF-8')
-except locale.Error:
-    try:
-        locale.setlocale(locale.LC_ALL, 'es_CL.UTF-8')  # Intentar con locale chileno
-    except locale.Error:
-        try:
-            locale.setlocale(locale.LC_ALL, 'es_ES')  # Intentar sin UTF-8
-        except locale.Error:
-            # Si nada funciona, definimos los meses manualmente
-            MESES = {
-                1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril',
-                5: 'Mayo', 6: 'Junio', 7: 'Julio', 8: 'Agosto',
-                9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre'
-            }
-            
-            def obtener_nombre_mes(numero_mes):
-                return MESES.get(numero_mes, '')
+    # Crear tablas si no existen
+    c.executescript('''
+        CREATE TABLE IF NOT EXISTS usuarios (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,
+            nombre TEXT NOT NULL,
+            rol TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
 
-# Función para obtener el nombre del mes
-def obtener_nombre_mes(numero_mes):
-    try:
-        # Crear una fecha con el mes deseado
-        fecha = datetime(2000, numero_mes, 1)
-        # Obtener el nombre del mes en español
-        return fecha.strftime('%B').capitalize()
-    except:
-        # Si falla, usar el diccionario de respaldo
-        return MESES.get(numero_mes, '')
+        CREATE TABLE IF NOT EXISTS cursos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nombre TEXT NOT NULL,
+            año INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS alumnos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nombre TEXT NOT NULL,
+            id_curso INTEGER,
+            FOREIGN KEY (id_curso) REFERENCES cursos (id)
+        );
+
+        CREATE TABLE IF NOT EXISTS asistencia (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_alumno INTEGER,
+            fecha TEXT NOT NULL,
+            presente BOOLEAN NOT NULL,
+            FOREIGN KEY (id_alumno) REFERENCES alumnos (id),
+            UNIQUE(id_alumno, fecha)
+        );
+    ''')
+
+    # Verificar si existe un usuario admin
+    admin = c.execute('SELECT * FROM usuarios WHERE username = ?', ('admin',)).fetchone()
+    if not admin:
+        # Crear usuario admin por defecto
+        c.execute(
+            'INSERT INTO usuarios (username, password, nombre, rol) VALUES (?, ?, ?, ?)',
+            ('admin', generate_password_hash('admin'), 'Administrador', 'admin')
+        )
+        logger.info('Usuario admin creado con éxito')
+
+    conn.commit()
+    conn.close()
+    logger.info('Base de datos inicializada correctamente')
 
 app = Flask(__name__,
           static_folder='static',
@@ -72,14 +89,6 @@ app.secret_key = os.environ.get('SECRET_KEY', 'tu_clave_secreta_aqui')  # Asegú
 app.config['ENV'] = 'production'
 app.config['DEBUG'] = False
 
-# Configuración de la base de datos para Railway
-if os.environ.get('RAILWAY_ENVIRONMENT'):
-    DB_PATH = os.path.join('/tmp', "asistencia_multiples_cursos.db")
-else:
-    DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "asistencia_multiples_cursos.db")
-
-logger.info(f'Usando base de datos en: {DB_PATH}')
-
 # Asegurarse de que existan las carpetas necesarias
 for folder in ['static', 'templates']:
     if not os.path.exists(folder):
@@ -87,145 +96,18 @@ for folder in ['static', 'templates']:
         logger.info(f'Carpeta {folder} creada')
 
 # Asegurarse que el directorio de la base de datos tenga permisos de escritura
-db_dir = os.path.dirname(DB_PATH)
+db_dir = os.path.dirname('asistencia_multiples_cursos.db')
 if not os.path.exists(db_dir):
     os.makedirs(db_dir)
     logger.info(f'Directorio de base de datos creado: {db_dir}')
 
 # Verificar permisos de escritura
 try:
-    with open(DB_PATH, 'a'):
+    with open('asistencia_multiples_cursos.db', 'a'):
         pass
     logger.info('Permisos de escritura verificados para la base de datos')
 except IOError as e:
     logger.error(f'Error de permisos en la base de datos: {str(e)}')
-
-def get_db_connection():
-    if os.environ.get('DATABASE_URL'):
-        # Usar PostgreSQL en Railway
-        conn = psycopg2.connect(os.environ.get('DATABASE_URL'))
-        conn.cursor_factory = DictCursor
-        return conn
-    else:
-        # Usar SQLite en desarrollo local
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        return conn
-
-def init_db():
-    logger.info('Inicializando base de datos...')
-    conn = get_db_connection()
-    c = conn.cursor()
-    
-    if os.environ.get('DATABASE_URL'):
-        # PostgreSQL
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS usuarios (
-                id SERIAL PRIMARY KEY,
-                username TEXT UNIQUE NOT NULL,
-                password TEXT NOT NULL,
-                nombre TEXT NOT NULL,
-                rol TEXT CHECK(rol IN ('admin', 'usuario')) NOT NULL DEFAULT 'usuario',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS cursos (
-                id SERIAL PRIMARY KEY,
-                nombre TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS alumnos (
-                id SERIAL PRIMARY KEY,
-                nombre TEXT NOT NULL,
-                id_curso INTEGER REFERENCES cursos(id),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS asistencia (
-                id SERIAL PRIMARY KEY,
-                id_alumno INTEGER REFERENCES alumnos(id),
-                fecha TEXT NOT NULL,
-                presente INTEGER NOT NULL,
-                UNIQUE(id_alumno, fecha)
-            )
-        ''')
-    else:
-        # SQLite
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS usuarios (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT UNIQUE NOT NULL,
-                password TEXT NOT NULL,
-                nombre TEXT NOT NULL,
-                rol TEXT CHECK(rol IN ('admin', 'usuario')) NOT NULL DEFAULT 'usuario',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS cursos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                nombre TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS alumnos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                nombre TEXT NOT NULL,
-                id_curso INTEGER,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY(id_curso) REFERENCES cursos(id)
-            )
-        ''')
-        
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS asistencia (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                id_alumno INTEGER,
-                fecha TEXT NOT NULL,
-                presente INTEGER NOT NULL,
-                UNIQUE(id_alumno, fecha),
-                FOREIGN KEY(id_alumno) REFERENCES alumnos(id)
-            )
-        ''')
-    
-    logger.info('Tablas verificadas')
-    
-    # Verificar si existe un administrador
-    c.execute('SELECT id FROM usuarios WHERE rol = %s LIMIT 1', ('admin',) if os.environ.get('DATABASE_URL') else ('admin',))
-    admin = c.fetchone()
-    
-    # Si no hay admin, crear uno por defecto
-    if not admin:
-        try:
-            hashed_password = generate_password_hash('admin123', method='pbkdf2:sha256')
-            if os.environ.get('DATABASE_URL'):
-                c.execute('''
-                INSERT INTO usuarios (username, password, nombre, rol)
-                VALUES (%s, %s, %s, %s)
-                ''', ('admin', hashed_password, 'Administrador', 'admin'))
-            else:
-                c.execute('''
-                INSERT INTO usuarios (username, password, nombre, rol)
-                VALUES (?, ?, ?, ?)
-                ''', ('admin', hashed_password, 'Administrador', 'admin'))
-            conn.commit()
-            logger.info('Usuario administrador creado exitosamente')
-        except (sqlite3.IntegrityError, psycopg2.IntegrityError):
-            logger.warning('Ya existe un usuario con el nombre admin')
-    else:
-        logger.info('Ya existe un usuario administrador')
-    
-    conn.close()
 
 # Inicializar la base de datos al arrancar
 init_db()
@@ -275,7 +157,7 @@ def login():
             
             conn = get_db_connection()
             c = conn.cursor()
-            user = c.execute('SELECT id, password, rol FROM usuarios WHERE username = %s', (username,) if os.environ.get('DATABASE_URL') else (username,)).fetchone()
+            user = c.execute('SELECT id, password, rol FROM usuarios WHERE username = ?', (username,)).fetchone()
             conn.close()
             
             if user:
@@ -290,7 +172,7 @@ def login():
                 except Exception as hash_error:
                     logger.error(f'Error al verificar contraseña: {str(hash_error)}')
                     # Si hay error con el hash, intentar comparación directa para admin
-                    if username == 'admin' and password == 'admin123':
+                    if username == 'admin' and password == 'admin':
                         session['user_id'] = user[0]
                         session['username'] = username
                         session['user_role'] = user[2]
@@ -325,12 +207,12 @@ def register():
         try:
             conn = get_db_connection()
             c = conn.cursor()
-            c.execute('INSERT INTO usuarios (username, password, nombre, rol) VALUES (%s, %s, %s, %s)', (username, generate_password_hash(password), nombre, rol) if os.environ.get('DATABASE_URL') else (username, generate_password_hash(password), nombre, rol))
+            c.execute('INSERT INTO usuarios (username, password, nombre, rol) VALUES (?, ?, ?, ?)', (username, generate_password_hash(password), nombre, rol))
             conn.commit()
             conn.close()
             flash('Usuario creado exitosamente', 'success')
             return redirect(url_for('admin_panel'))
-        except (sqlite3.IntegrityError, psycopg2.IntegrityError):
+        except sqlite3.IntegrityError:
             flash('El nombre de usuario ya existe', 'error')
         except Exception as e:
             flash('Error al crear usuario', 'error')
@@ -362,7 +244,7 @@ def index():
 @login_required
 def get_curso(id):
     conn = get_db_connection()
-    curso = conn.execute('SELECT * FROM cursos WHERE id = %s', (id,) if os.environ.get('DATABASE_URL') else (id,)).fetchone()
+    curso = conn.execute('SELECT * FROM cursos WHERE id = ?', (id,)).fetchone()
     conn.close()
     if curso:
         return jsonify({
@@ -383,9 +265,9 @@ def guardar_curso():
         conn = get_db_connection()
         
         if curso_id:  # Actualizar curso existente
-            conn.execute('UPDATE cursos SET nombre = %s, año = %s WHERE id = %s', (nombre, año, curso_id) if os.environ.get('DATABASE_URL') else (nombre, año, curso_id))
+            conn.execute('UPDATE cursos SET nombre = ?, año = ? WHERE id = ?', (nombre, año, curso_id))
         else:  # Crear nuevo curso
-            cur = conn.execute('INSERT INTO cursos (nombre, año) VALUES (%s, %s)', (nombre, año) if os.environ.get('DATABASE_URL') else (nombre, año))
+            cur = conn.execute('INSERT INTO cursos (nombre, año) VALUES (?, ?)', (nombre, año))
             curso_id = cur.lastrowid
         
         # Procesar lista de alumnos si se proporcionó
@@ -397,11 +279,11 @@ def guardar_curso():
                 
                 # Eliminar alumnos existentes si es una actualización
                 if curso_id:
-                    conn.execute('DELETE FROM alumnos WHERE id_curso = %s', (curso_id,) if os.environ.get('DATABASE_URL') else (curso_id,))
+                    conn.execute('DELETE FROM alumnos WHERE id_curso = ?', (curso_id,))
                 
                 # Insertar nuevos alumnos
                 for nombre in nombres:
-                    conn.execute('INSERT INTO alumnos (nombre, id_curso) VALUES (%s, %s)', (nombre, curso_id) if os.environ.get('DATABASE_URL') else (nombre, curso_id))
+                    conn.execute('INSERT INTO alumnos (nombre, id_curso) VALUES (?, ?)', (nombre, curso_id))
         
         conn.commit()
         conn.close()
@@ -463,30 +345,30 @@ def asistencia(curso_id):
 @login_required
 def dashboard(curso_id):
     conn = get_db_connection()
-    curso = conn.execute('SELECT * FROM cursos WHERE id = %s', (curso_id,) if os.environ.get('DATABASE_URL') else (curso_id,)).fetchone()
+    curso = conn.execute('SELECT * FROM cursos WHERE id = ?', (curso_id,)).fetchone()
     
     # Get statistics
-    total_alumnos = conn.execute('SELECT COUNT(*) FROM alumnos WHERE id_curso = %s', (curso_id,) if os.environ.get('DATABASE_URL') else (curso_id,)).fetchone()[0]
+    total_alumnos = conn.execute('SELECT COUNT(*) FROM alumnos WHERE id_curso = ?', (curso_id,)).fetchone()[0]
     dias_registrados = conn.execute('''
         SELECT COUNT(DISTINCT fecha) FROM asistencia 
-        WHERE id_alumno IN (SELECT id FROM alumnos WHERE id_curso = %s)
-    ''', (curso_id,) if os.environ.get('DATABASE_URL') else (curso_id,)).fetchone()[0]
+        WHERE id_alumno IN (SELECT id FROM alumnos WHERE id_curso = ?)
+    ''', (curso_id,)).fetchone()[0]
     
     # Get detailed attendance data
     alumnos_data = []
-    alumnos = conn.execute('SELECT * FROM alumnos WHERE id_curso = %s ORDER BY nombre', (curso_id,) if os.environ.get('DATABASE_URL') else (curso_id,)).fetchall()
+    alumnos = conn.execute('SELECT * FROM alumnos WHERE id_curso = ? ORDER BY nombre', (curso_id,)).fetchall()
     
     for alumno in alumnos:
         presentes = conn.execute('''
             SELECT COUNT(*) FROM asistencia 
-            WHERE id_alumno = %s AND presente = 1
-        ''', (alumno['id'],) if os.environ.get('DATABASE_URL') else (alumno['id'],)).fetchone()[0]
+            WHERE id_alumno = ? AND presente = 1
+        ''', (alumno['id'],)).fetchone()[0]
         
         ultima_asistencia = conn.execute('''
             SELECT fecha FROM asistencia 
-            WHERE id_alumno = %s AND presente = 1 
+            WHERE id_alumno = ? AND presente = 1 
             ORDER BY fecha DESC LIMIT 1
-        ''', (alumno['id'],) if os.environ.get('DATABASE_URL') else (alumno['id'],)).fetchone()
+        ''', (alumno['id'],)).fetchone()
         
         porcentaje = (presentes / dias_registrados * 100) if dias_registrados > 0 else 0
         
@@ -605,7 +487,7 @@ def generar_pdf(curso_id, mes, año):
 
     # Obtener datos del curso y asistencia
     conn = get_db_connection()
-    curso = conn.execute('SELECT nombre FROM cursos WHERE id = %s', (curso_id,) if os.environ.get('DATABASE_URL') else (curso_id,)).fetchone()
+    curso = conn.execute('SELECT nombre FROM cursos WHERE id = ?', (curso_id,)).fetchone()
     
     # Título del curso centrado
     title_style = ParagraphStyle(
@@ -625,11 +507,11 @@ def generar_pdf(curso_id, mes, año):
                MAX(CASE WHEN ast.presente = 1 THEN ast.fecha END) as ultima_asistencia
         FROM alumnos a
         LEFT JOIN asistencia ast ON a.id = ast.id_alumno
-        WHERE a.id_curso = %s
-        AND strftime('%Y-%m', ast.fecha) = %s
+        WHERE a.id_curso = ? 
+        AND strftime('%Y-%m', ast.fecha) = ?
         GROUP BY a.id
         ORDER BY a.nombre
-    ''', (curso_id, f"{año}-{mes:02d}") if os.environ.get('DATABASE_URL') else (curso_id, f"{año}-{mes:02d}")).fetchall()
+    ''', (curso_id, f"{año}-{mes:02d}")).fetchall()
 
     # Crear tabla de asistencia
     data = [['Alumno', 'Días\nPresentes', 'Días\nTotales', '% Asistencia', 'Última\nAsistencia', 'Estado']]
@@ -724,7 +606,7 @@ def generar_pdf(curso_id, mes, año):
 @login_required
 def export_pdf(curso_id):
     conn = get_db_connection()
-    curso = conn.execute('SELECT * FROM cursos WHERE id = %s', (curso_id,) if os.environ.get('DATABASE_URL') else (curso_id,)).fetchone()
+    curso = conn.execute('SELECT * FROM cursos WHERE id = ?', (curso_id,)).fetchone()
     
     # Obtener el mes actual o el especificado
     month = request.args.get('month', type=int, default=date.today().month)
@@ -745,8 +627,8 @@ def export_pdf(curso_id):
 @login_required
 def gestionar_alumnos(id):
     conn = get_db_connection()
-    curso = conn.execute('SELECT * FROM cursos WHERE id = %s', (id,) if os.environ.get('DATABASE_URL') else (id,)).fetchone()
-    alumnos = conn.execute('SELECT * FROM alumnos WHERE id_curso = %s ORDER BY nombre', (id,) if os.environ.get('DATABASE_URL') else (id,)).fetchall()
+    curso = conn.execute('SELECT * FROM cursos WHERE id = ?', (id,)).fetchone()
+    alumnos = conn.execute('SELECT * FROM alumnos WHERE id_curso = ? ORDER BY nombre', (id,)).fetchall()
     conn.close()
     return render_template('alumnos.html', curso=curso, alumnos=alumnos)
 
@@ -756,7 +638,7 @@ def actualizar_alumno():
     try:
         data = request.json
         conn = get_db_connection()
-        conn.execute('UPDATE alumnos SET nombre = %s WHERE id = %s', (data['nombre'], data['id']) if os.environ.get('DATABASE_URL') else (data['nombre'], data['id']))
+        conn.execute('UPDATE alumnos SET nombre = ? WHERE id = ?', (data['nombre'], data['id']))
         conn.commit()
         conn.close()
         return jsonify({'success': True})
@@ -770,9 +652,9 @@ def eliminar_alumno():
         data = request.json
         conn = get_db_connection()
         # Primero eliminamos las asistencias del alumno
-        conn.execute('DELETE FROM asistencia WHERE id_alumno = %s', (data['id'],) if os.environ.get('DATABASE_URL') else (data['id'],))
+        conn.execute('DELETE FROM asistencia WHERE id_alumno = ?', (data['id'],))
         # Luego eliminamos al alumno
-        conn.execute('DELETE FROM alumnos WHERE id = %s', (data['id'],) if os.environ.get('DATABASE_URL') else (data['id'],))
+        conn.execute('DELETE FROM alumnos WHERE id = ?', (data['id'],))
         conn.commit()
         conn.close()
         return jsonify({'success': True})
@@ -785,7 +667,7 @@ def agregar_alumno():
     try:
         data = request.json
         conn = get_db_connection()
-        cur = conn.execute('INSERT INTO alumnos (nombre, id_curso) VALUES (%s, %s)', (data['nombre'], data['curso_id']) if os.environ.get('DATABASE_URL') else (data['nombre'], data['curso_id']))
+        cur = conn.execute('INSERT INTO alumnos (nombre, id_curso) VALUES (?, ?)', (data['nombre'], data['curso_id']))
         conn.commit()
         conn.close()
         return jsonify({'success': True})
@@ -807,7 +689,7 @@ def importar_alumnos():
             
             conn = get_db_connection()
             for nombre in nombres:
-                conn.execute('INSERT INTO alumnos (nombre, id_curso) VALUES (%s, %s)', (nombre, curso_id) if os.environ.get('DATABASE_URL') else (nombre, curso_id))
+                conn.execute('INSERT INTO alumnos (nombre, id_curso) VALUES (?, ?)', (nombre, curso_id))
             conn.commit()
             conn.close()
             return jsonify({'success': True})
