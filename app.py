@@ -8,12 +8,12 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
-from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from io import BytesIO
 from reportlab.lib.enums import TA_LEFT, TA_CENTER
-from reportlab.platypus import Spacer, Image, ParagraphStyle
+from reportlab.platypus import Image
 from reportlab.lib.colors import Color
 
 # Configurar logging
@@ -99,6 +99,15 @@ def init_db():
     except Exception as e:
         logger.error(f'Error al inicializar la base de datos: {str(e)}')
         raise
+
+# Función para obtener el nombre del mes
+def obtener_nombre_mes(numero_mes):
+    meses = {
+        1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril',
+        5: 'Mayo', 6: 'Junio', 7: 'Julio', 8: 'Agosto',
+        9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre'
+    }
+    return meses.get(numero_mes, '')
 
 app = Flask(__name__,
           static_folder='static',
