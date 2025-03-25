@@ -25,60 +25,45 @@ DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'asistencia_m
 
 def get_db_connection():
     """Obtiene una conexión a la base de datos SQLite"""
+    # Asegurarse de que el directorio de la base de datos existe
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    
+    # Crear la conexión
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    
+    # Si la base de datos está vacía, inicializarla
+    cursor = conn.cursor()
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    if not cursor.fetchall():
+        init_db()
+    
     return conn
 
 def init_db():
     """Inicializa la base de datos creando las tablas necesarias"""
     logger.info('Inicializando base de datos...')
-    conn = get_db_connection()
-    c = conn.cursor()
-
-    # Crear tablas si no existen
-    c.executescript('''
-        CREATE TABLE IF NOT EXISTS usuarios (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL,
-            nombre TEXT NOT NULL,
-            rol TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE TABLE IF NOT EXISTS cursos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nombre TEXT NOT NULL,
-            año INTEGER NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS alumnos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nombre TEXT NOT NULL,
-            id_curso INTEGER,
-            FOREIGN KEY (id_curso) REFERENCES cursos (id)
-        );
-
-        CREATE TABLE IF NOT EXISTS asistencia (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            id_alumno INTEGER,
-            fecha TEXT NOT NULL,
-            presente BOOLEAN NOT NULL,
-            FOREIGN KEY (id_alumno) REFERENCES alumnos (id),
-            UNIQUE(id_alumno, fecha)
-        );
-    ''')
-
+    conn = sqlite3.connect(DB_PATH)
+    
+    # Leer el esquema SQL
+    with open('schema.sql', 'r') as f:
+        schema = f.read()
+    
+    # Ejecutar el esquema
+    conn.executescript(schema)
+    
     # Verificar si existe un usuario admin
-    admin = c.execute('SELECT * FROM usuarios WHERE username = ?', ('admin',)).fetchone()
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM usuarios WHERE username = ?', ('admin',))
+    admin = cursor.fetchone()
+    
+    # Si no existe el admin, crearlo
     if not admin:
-        # Crear usuario admin por defecto
-        c.execute(
-            'INSERT INTO usuarios (username, password, nombre, rol) VALUES (?, ?, ?, ?)',
-            ('admin', generate_password_hash('admin'), 'Administrador', 'admin')
-        )
-        logger.info('Usuario admin creado con éxito')
-
+        logger.info('Creando usuario admin...')
+        cursor.execute('''
+            INSERT INTO usuarios (username, password, nombre, rol) VALUES (?, ?, ?, ?)
+        ''', ('admin', generate_password_hash('admin'), 'Administrador', 'admin'))
+    
     conn.commit()
     conn.close()
     logger.info('Base de datos inicializada correctamente')
@@ -115,12 +100,6 @@ for folder in ['static', 'templates']:
         os.makedirs(folder_path)
         logger.info(f'Carpeta {folder} creada en {folder_path}')
 
-# Asegurarse que el directorio de la base de datos existe
-db_dir = os.path.dirname(os.path.abspath(DB_PATH))
-if not os.path.exists(db_dir):
-    os.makedirs(db_dir)
-    logger.info(f'Directorio de base de datos creado: {db_dir}')
-
 # Verificar permisos de escritura
 try:
     with open(DB_PATH, 'a'):
@@ -128,9 +107,6 @@ try:
     logger.info('Permisos de escritura verificados para la base de datos')
 except IOError as e:
     logger.error(f'Error de permisos en la base de datos: {str(e)}')
-
-# Inicializar la base de datos al arrancar
-init_db()
 
 @app.route('/')
 def root():
