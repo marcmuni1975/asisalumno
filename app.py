@@ -8,13 +8,10 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from io import BytesIO
-from reportlab.lib.enums import TA_LEFT, TA_CENTER
-from reportlab.platypus import Image
-from reportlab.lib.colors import Color
 
 # Configurar logging
 logging.basicConfig(
@@ -24,90 +21,82 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Definir la ruta de la base de datos
-if os.environ.get('RAILWAY_ENVIRONMENT'):
-    DB_PATH = '/data/asistencia_multiples_cursos.db'
-    # Asegurarse que el directorio /data existe
-    if not os.path.exists('/data'):
-        os.makedirs('/data')
-else:
-    DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'asistencia_multiples_cursos.db')
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'asistencia_multiples_cursos.db')
 
 def get_db_connection():
     """Obtiene una conexión a la base de datos SQLite"""
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        return conn
-    except sqlite3.Error as e:
-        logger.error(f'Error al conectar a la base de datos: {str(e)}')
-        raise
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 def init_db():
     """Inicializa la base de datos creando las tablas necesarias"""
-    logger.info(f'Inicializando base de datos en: {DB_PATH}')
-    try:
-        conn = get_db_connection()
-        c = conn.cursor()
+    logger.info('Inicializando base de datos...')
+    conn = get_db_connection()
+    c = conn.cursor()
 
-        # Crear tablas si no existen
-        c.executescript('''
-            CREATE TABLE IF NOT EXISTS usuarios (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT UNIQUE NOT NULL,
-                password TEXT NOT NULL,
-                nombre TEXT NOT NULL,
-                rol TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
+    # Crear tablas si no existen
+    c.executescript('''
+        CREATE TABLE IF NOT EXISTS usuarios (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,
+            nombre TEXT NOT NULL,
+            rol TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
 
-            CREATE TABLE IF NOT EXISTS cursos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                nombre TEXT NOT NULL,
-                año INTEGER NOT NULL
-            );
+        CREATE TABLE IF NOT EXISTS cursos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nombre TEXT NOT NULL,
+            año INTEGER NOT NULL
+        );
 
-            CREATE TABLE IF NOT EXISTS alumnos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                nombre TEXT NOT NULL,
-                id_curso INTEGER,
-                FOREIGN KEY (id_curso) REFERENCES cursos (id)
-            );
+        CREATE TABLE IF NOT EXISTS alumnos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nombre TEXT NOT NULL,
+            id_curso INTEGER,
+            FOREIGN KEY (id_curso) REFERENCES cursos (id)
+        );
 
-            CREATE TABLE IF NOT EXISTS asistencia (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                id_alumno INTEGER,
-                fecha TEXT NOT NULL,
-                presente BOOLEAN NOT NULL,
-                FOREIGN KEY (id_alumno) REFERENCES alumnos (id),
-                UNIQUE(id_alumno, fecha)
-            );
-        ''')
+        CREATE TABLE IF NOT EXISTS asistencia (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_alumno INTEGER,
+            fecha TEXT NOT NULL,
+            presente BOOLEAN NOT NULL,
+            FOREIGN KEY (id_alumno) REFERENCES alumnos (id),
+            UNIQUE(id_alumno, fecha)
+        );
+    ''')
 
-        # Verificar si existe un usuario admin
-        admin = c.execute('SELECT * FROM usuarios WHERE username = ?', ('admin',)).fetchone()
-        if not admin:
-            # Crear usuario admin por defecto
-            c.execute(
-                'INSERT INTO usuarios (username, password, nombre, rol) VALUES (?, ?, ?, ?)',
-                ('admin', generate_password_hash('admin'), 'Administrador', 'admin')
-            )
-            logger.info('Usuario admin creado con éxito')
+    # Verificar si existe un usuario admin
+    admin = c.execute('SELECT * FROM usuarios WHERE username = ?', ('admin',)).fetchone()
+    if not admin:
+        # Crear usuario admin por defecto
+        c.execute(
+            'INSERT INTO usuarios (username, password, nombre, rol) VALUES (?, ?, ?, ?)',
+            ('admin', generate_password_hash('admin'), 'Administrador', 'admin')
+        )
+        logger.info('Usuario admin creado con éxito')
 
-        conn.commit()
-        conn.close()
-        logger.info('Base de datos inicializada correctamente')
-    except Exception as e:
-        logger.error(f'Error al inicializar la base de datos: {str(e)}')
-        raise
+    conn.commit()
+    conn.close()
+    logger.info('Base de datos inicializada correctamente')
 
 # Función para obtener el nombre del mes
-def obtener_nombre_mes(numero_mes):
+def obtener_nombre_mes(mes):
     meses = {
         1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril',
         5: 'Mayo', 6: 'Junio', 7: 'Julio', 8: 'Agosto',
         9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre'
     }
-    return meses.get(numero_mes, '')
+    if isinstance(mes, str):
+        for key, value in meses.items():
+            if value.lower() == mes.lower():
+                return value
+        return ''
+    else:
+        return meses.get(int(mes), '')
 
 app = Flask(__name__,
           static_folder='static',
@@ -327,6 +316,11 @@ def guardar_curso():
 def asistencia(curso_id):
     conn = get_db_connection()
     curso = conn.execute('SELECT * FROM cursos WHERE id = ?', (curso_id,)).fetchone()
+    if not curso:
+        conn.close()
+        flash('Curso no encontrado', 'error')
+        return redirect(url_for('index'))
+    
     alumnos = conn.execute('SELECT * FROM alumnos WHERE id_curso = ? ORDER BY nombre', (curso_id,)).fetchall()
     
     # Get current month and year
@@ -342,20 +336,31 @@ def asistencia(curso_id):
             if day != 0 and date(year, month, day).weekday() < 5:  # Monday to Friday
                 weekdays.append(day)
     
-    # Get attendance data
+    # Get attendance data with a single SQL query
     attendance_data = {}
     for alumno in alumnos:
         attendance_data[alumno['id']] = {}
+        # Construir la fecha en el formato correcto para SQLite
+        fecha_inicio = f"{year}-{month:02d}-01"
+        fecha_fin = f"{year}-{month:02d}-31"
+        
+        # Obtener todas las asistencias del mes para el alumno
+        asistencias = conn.execute('''
+            SELECT fecha, presente 
+            FROM asistencia 
+            WHERE id_alumno = ? 
+            AND fecha BETWEEN ? AND ?
+        ''', (alumno['id'], fecha_inicio, fecha_fin)).fetchall()
+        
+        # Inicializar todos los días como None
         for day in weekdays:
-            fecha = f"{year}-{month:02d}-{day:02d}"
-            asistencia = conn.execute(
-                'SELECT presente FROM asistencia WHERE id_alumno = ? AND fecha = ?',
-                (alumno['id'], fecha)
-            ).fetchone()
-            if asistencia:
-                attendance_data[alumno['id']][day] = asistencia['presente']
-            else:
-                attendance_data[alumno['id']][day] = None
+            attendance_data[alumno['id']][day] = None
+        
+        # Actualizar con los datos existentes
+        for asistencia in asistencias:
+            fecha = datetime.strptime(asistencia['fecha'], '%Y-%m-%d')
+            if fecha.day in weekdays:
+                attendance_data[alumno['id']][fecha.day] = asistencia['presente']
     
     conn.close()
     
@@ -431,27 +436,17 @@ def save_attendance():
     conn = None
     try:
         conn = get_db_connection()
+        # Comenzar una transacción
+        conn.execute('BEGIN TRANSACTION')
+        
         for alumno_id, fechas in data['attendance'].items():
             for fecha, presente in fechas.items():
-                try:
-                    # Primero intentamos actualizar
-                    conn.execute('''
-                        UPDATE asistencia 
-                        SET presente = ? 
-                        WHERE id_alumno = ? AND fecha = ?
-                    ''', (presente, int(alumno_id), fecha))
-                    
-                    # Si no actualizó ninguna fila, insertamos una nueva
-                    if conn.total_changes == 0:
-                        conn.execute('''
-                            INSERT INTO asistencia (id_alumno, fecha, presente)
-                            VALUES (?, ?, ?)
-                        ''', (int(alumno_id), fecha, presente))
-                    
-                    logger.info(f'Asistencia guardada: alumno={alumno_id}, fecha={fecha}, presente={presente}')
-                except sqlite3.Error as e:
-                    logger.error(f'Error al guardar asistencia individual: {str(e)}')
-                    raise
+                # Usar REPLACE INTO para manejar duplicados
+                conn.execute('''
+                    REPLACE INTO asistencia (id_alumno, fecha, presente)
+                    VALUES (?, ?, ?)
+                ''', (int(alumno_id), fecha, presente))
+                logger.info(f'Asistencia guardada: alumno={alumno_id}, fecha={fecha}, presente={presente}')
         
         conn.commit()
         logger.info('Todas las asistencias guardadas correctamente')
