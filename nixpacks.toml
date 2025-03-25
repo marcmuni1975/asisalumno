@@ -1,11 +1,5 @@
 [phases.setup]
-nixPkgs = ['python39']
-
-[phases.build]
-cmds = ['python3 -m ensurepip --upgrade']
-
-[phases.install]
-cmds = ['python3 -m pip install -r requirements.txt']
+nixPkgs = ["python39", "python39.pkgs.pip"]
 
 [start]
-cmd = 'gunicorn app:app --bind 0.0.0.0:$PORT'
+cmd = "gunicorn app:app --bind 0.0.0.0:$PORT"
