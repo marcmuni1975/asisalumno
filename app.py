@@ -426,14 +426,14 @@ def save_attendance():
             for fecha, presente in fechas.items():
                 try:
                     # Primero intentamos actualizar
-                    result = conn.execute('''
+                    conn.execute('''
                         UPDATE asistencia 
                         SET presente = ? 
                         WHERE id_alumno = ? AND fecha = ?
                     ''', (presente, int(alumno_id), fecha))
                     
-                    # Si no se actualizó ninguna fila, insertamos
-                    if result.rowcount == 0:
+                    # Si no actualizó ninguna fila, insertamos una nueva
+                    if conn.total_changes == 0:
                         conn.execute('''
                             INSERT INTO asistencia (id_alumno, fecha, presente)
                             VALUES (?, ?, ?)
@@ -443,6 +443,7 @@ def save_attendance():
                 except sqlite3.Error as e:
                     logger.error(f'Error al guardar asistencia individual: {str(e)}')
                     raise
+        
         conn.commit()
         logger.info('Todas las asistencias guardadas correctamente')
         return jsonify({'success': True})
