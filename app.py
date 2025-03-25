@@ -8,7 +8,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from io import BytesIO
@@ -453,13 +453,14 @@ def generar_pdf(curso_id, mes, año):
     styles = getSampleStyleSheet()
 
     # Crear tabla para el encabezado (logo y texto)
-    logo_path = os.path.join('static', 'logo.png')
-    if os.path.exists(logo_path):
+    logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'logo.png')
+    try:
         logo_img = Image(logo_path)
         logo_img.drawHeight = 50
         logo_img.drawWidth = 50
-    else:
-        logo_img = Paragraph("LOGO", styles['Title'])
+    except:
+        # Si hay algún error con el logo, usar texto en su lugar
+        logo_img = Paragraph("CEIA", styles['Title'])
 
     # Estilo personalizado para el encabezado
     header_style = ParagraphStyle(
