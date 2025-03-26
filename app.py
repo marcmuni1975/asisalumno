@@ -1,17 +1,18 @@
 from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for, session, flash
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import sqlite3
 import calendar
 import os
 import logging
-from werkzeug.security import generate_password_hash, check_password_hash
+import json
 from functools import wraps
+from io import BytesIO
 from reportlab.lib import colors
-from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
+from reportlab.lib.pagesizes import letter, landscape
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image, PageBreak
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
-from io import BytesIO
+from werkzeug.security import generate_password_hash, check_password_hash
 
 # Configurar logging
 logging.basicConfig(
@@ -356,274 +357,507 @@ def asistencia(curso_id):
 @app.route('/dashboard/<int:curso_id>')
 @login_required
 def dashboard(curso_id):
+    # Obtener mes y año de los parámetros o usar el actual
+    mes_actual = int(request.args.get('month', datetime.now().month))
+    año_actual = int(request.args.get('year', datetime.now().year))
+    
+    # Nombres de meses en español
+    meses = {
+        1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril',
+        5: 'Mayo', 6: 'Junio', 7: 'Julio', 8: 'Agosto',
+        9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre'
+    }
+    
     conn = get_db_connection()
     curso = conn.execute('SELECT * FROM cursos WHERE id = ?', (curso_id,)).fetchone()
     
-    # Get statistics
-    total_alumnos = conn.execute('SELECT COUNT(*) FROM alumnos WHERE id_curso = ?', (curso_id,)).fetchone()[0]
-    dias_registrados = conn.execute('''
-        SELECT COUNT(DISTINCT fecha) FROM asistencia 
-        WHERE id_alumno IN (SELECT id FROM alumnos WHERE id_curso = ?)
-    ''', (curso_id,)).fetchone()[0]
+    # Obtener días hábiles del mes (excluyendo sábados y domingos)
+    dias_habiles = []
+    num_dias = calendar.monthrange(año_actual, mes_actual)[1]
+    for dia in range(1, num_dias + 1):
+        fecha = date(año_actual, mes_actual, dia)
+        if fecha.weekday() < 5:  # 0-4 son Lunes a Viernes
+            dias_habiles.append(fecha)
     
-    # Get detailed attendance data
+    # Obtener asistencias del mes para todos los alumnos
     alumnos_data = []
     alumnos = conn.execute('SELECT * FROM alumnos WHERE id_curso = ? ORDER BY nombre', (curso_id,)).fetchall()
     
     for alumno in alumnos:
-        presentes = conn.execute('''
-            SELECT COUNT(*) FROM asistencia 
-            WHERE id_alumno = ? AND presente = 1
-        ''', (alumno['id'],)).fetchone()[0]
+        # Obtener asistencias del mes para este alumno
+        asistencias = conn.execute('''
+            SELECT DISTINCT fecha 
+            FROM asistencia 
+            WHERE id_alumno = ? 
+            AND strftime('%Y-%m', fecha) = ?
+            AND presente = 1
+            GROUP BY fecha
+        ''', (alumno['id'], f"{año_actual}-{mes_actual:02d}")).fetchall()
         
+        # Obtener la última asistencia del alumno
         ultima_asistencia = conn.execute('''
-            SELECT fecha FROM asistencia 
-            WHERE id_alumno = ? AND presente = 1 
+            SELECT fecha 
+            FROM asistencia 
+            WHERE id_alumno = ? 
+            AND presente = 1 
             ORDER BY fecha DESC LIMIT 1
         ''', (alumno['id'],)).fetchone()
         
-        porcentaje = (presentes / dias_registrados * 100) if dias_registrados > 0 else 0
+        # Contar días presentes
+        dias_presentes = len(asistencias)
         
+        # Calcular porcentaje
+        total_dias_habiles = len(dias_habiles)
+        porcentaje = (dias_presentes / total_dias_habiles * 100) if total_dias_habiles > 0 else 0
+        
+        # Determinar estado
+        estado = 'Regular' if porcentaje >= 50 else 'En Riesgo' if porcentaje >= 25 else 'No Asiste'
+        
+        # Agregar datos del alumno
         alumnos_data.append({
-            'id': alumno['id'],
             'nombre': alumno['nombre'],
-            'dias_presentes': presentes,
-            'dias_totales': dias_registrados,
+            'dias_presentes': dias_presentes,
+            'dias_totales': total_dias_habiles,
             'porcentaje': porcentaje,
-            'ultima_asistencia': ultima_asistencia[0] if ultima_asistencia else 'Sin asistencias',
-            'estado': 'Regular' if porcentaje >= 75 else 'En Riesgo' if porcentaje > 0 else 'No Asiste'
+            'ultima_asistencia': ultima_asistencia['fecha'] if ultima_asistencia else None,
+            'estado': estado
         })
     
-    conn.close()
-    return render_template('dashboard.html',
-                         curso=curso,
-                         total_alumnos=total_alumnos,
-                         dias_registrados=dias_registrados,
-                         alumnos_data=alumnos_data)
+    return render_template('dashboard.html', 
+                         curso=curso, 
+                         alumnos_data=alumnos_data,
+                         mes_actual=mes_actual,
+                         año_actual=año_actual,
+                         meses=meses)
 
 @app.route('/save_attendance', methods=['POST'])
 @login_required
 def save_attendance():
-    data = request.json
-    if not data or 'attendance' not in data:
-        logger.error('Datos de asistencia no recibidos correctamente')
-        return jsonify({'success': False, 'error': 'Datos de asistencia no válidos'})
-    
-    conn = None
     try:
-        conn = get_db_connection()
-        # Comenzar una transacción
-        conn.execute('BEGIN TRANSACTION')
+        data = request.get_json()
+        attendance = data.get('attendance', {})
         
-        for alumno_id, fechas in data['attendance'].items():
+        conn = get_db_connection()
+        
+        # Procesar cada alumno
+        for alumno_id, fechas in attendance.items():
+            # Procesar cada fecha
             for fecha, presente in fechas.items():
-                # Usar REPLACE INTO para manejar duplicados
-                conn.execute('''
-                    REPLACE INTO asistencia (id_alumno, fecha, presente)
-                    VALUES (?, ?, ?)
-                ''', (int(alumno_id), fecha, presente))
-                logger.info(f'Asistencia guardada: alumno={alumno_id}, fecha={fecha}, presente={presente}')
+                # Si el valor es null, eliminar el registro si existe
+                if presente is None:
+                    conn.execute('''
+                        DELETE FROM asistencia 
+                        WHERE id_alumno = ? AND fecha = ?
+                    ''', (alumno_id, fecha))
+                else:
+                    # Intentar actualizar primero
+                    result = conn.execute('''
+                        UPDATE asistencia 
+                        SET presente = ? 
+                        WHERE id_alumno = ? AND fecha = ?
+                    ''', (presente, alumno_id, fecha))
+                    
+                    # Si no se actualizó ningún registro, insertar uno nuevo
+                    if result.rowcount == 0:
+                        conn.execute('''
+                            INSERT INTO asistencia (id_alumno, fecha, presente)
+                            VALUES (?, ?, ?)
+                        ''', (alumno_id, fecha, presente))
+                
+                app.logger.info(f'Asistencia {"eliminada" if presente is None else "guardada"}: alumno={alumno_id}, fecha={fecha}, presente={presente}')
         
         conn.commit()
-        logger.info('Todas las asistencias guardadas correctamente')
         return jsonify({'success': True})
     except Exception as e:
-        logger.error(f'Error al guardar asistencia: {str(e)}')
-        if conn:
-            conn.rollback()
+        app.logger.error(f'Error al guardar asistencia: {str(e)}')
         return jsonify({'success': False, 'error': str(e)})
-    finally:
-        if conn:
-            conn.close()
 
-def generar_pdf(curso_id, mes, año):
-    # Crear un buffer para el PDF
-    buffer = BytesIO()
+@app.route('/exportar_asistencia_pdf/<int:curso_id>')
+@login_required
+def exportar_asistencia_pdf(curso_id):
+    # Obtener mes y año de los parámetros
+    month = request.args.get('month', type=int)
+    year = request.args.get('year', type=int)
     
-    # Crear el documento PDF con márgenes amplios
-    doc = SimpleDocTemplate(buffer,
-                          pagesize=letter,
-                          leftMargin=72,    # 1 pulgada = 72 puntos
-                          rightMargin=72,
-                          topMargin=72,
-                          bottomMargin=72)
-
-    # Lista para almacenar los elementos del PDF
-    elements = []
-    styles = getSampleStyleSheet()
-
-    # Crear tabla para el encabezado (logo y texto)
-    logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'logo.png')
-    try:
-        logo_img = Image(logo_path)
-        logo_img.drawHeight = 50
-        logo_img.drawWidth = 50
-    except:
-        # Si hay algún error con el logo, usar texto en su lugar
-        logo_img = Paragraph("CEIA", styles['Title'])
-
-    # Estilo personalizado para el encabezado
-    header_style = ParagraphStyle(
-        'HeaderStyle',
-        parent=styles['Normal'],
-        fontSize=12,
-        leading=14,
-        alignment=0  # 0=izquierda
-    )
-
-    header_text = Paragraph("""
-        <para>
-        <b>CEIA Amigos del Padre Hurtado</b><br/>
-        <b>La Serena</b><br/>
-        <font size=10>Reporte de Asistencia - {mes} {año}</font>
-        </para>
-    """.format(mes=obtener_nombre_mes(mes), año=año), header_style)
-
-    # Tabla de encabezado con logo y texto
-    header_table = Table([[logo_img, header_text]], colWidths=[60, None])
-    header_table.setStyle(TableStyle([
-        ('ALIGN', (0, 0), (0, 0), 'CENTER'),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('LEFTPADDING', (1, 0), (1, 0), 20),
-    ]))
-    elements.append(header_table)
-    elements.append(Spacer(1, 30))
-
-    # Obtener datos del curso y asistencia
+    if not month or not year:
+        return "Mes y año son requeridos", 400
+        
     conn = get_db_connection()
     curso = conn.execute('SELECT nombre FROM cursos WHERE id = ?', (curso_id,)).fetchone()
     
-    # Título del curso centrado
-    title_style = ParagraphStyle(
-        'CustomTitle',
-        parent=styles['Title'],
-        fontSize=14,
-        alignment=1  # Centrado
-    )
-    elements.append(Paragraph(f"Curso: {curso['nombre']}", title_style))
-    elements.append(Spacer(1, 20))
-
-    # Obtener datos de asistencia
+    # Obtener todos los días del mes
+    num_days = calendar.monthrange(year, month)[1]
+    all_days = [date(year, month, day) for day in range(1, num_days + 1)]
+    weekdays = [day for day in all_days if day.weekday() < 5]  # 0-4 son lunes a viernes
+    
+    # Obtener alumnos
     alumnos = conn.execute('''
-        SELECT a.*, 
-               COUNT(CASE WHEN ast.presente = 1 THEN 1 END) as presentes,
-               COUNT(DISTINCT ast.fecha) as total_dias,
-               MAX(CASE WHEN ast.presente = 1 THEN ast.fecha END) as ultima_asistencia
-        FROM alumnos a
-        LEFT JOIN asistencia ast ON a.id = ast.id_alumno
-        WHERE a.id_curso = ? 
-        AND strftime('%Y-%m', ast.fecha) = ?
-        GROUP BY a.id
-        ORDER BY a.nombre
-    ''', (curso_id, f"{año}-{mes:02d}")).fetchall()
+        SELECT id, nombre 
+        FROM alumnos 
+        WHERE id_curso = ? 
+        ORDER BY nombre
+    ''', (curso_id,)).fetchall()
 
-    # Crear tabla de asistencia
-    data = [['Alumno', 'Días\nPresentes', 'Días\nTotales', '% Asistencia', 'Última\nAsistencia', 'Estado']]
-    
-    for alumno in alumnos:
-        porcentaje = (alumno['presentes'] / alumno['total_dias'] * 100) if alumno['total_dias'] > 0 else 0
+    # Preparar datos para el PDF
+    data = []
+    for i, alumno in enumerate(alumnos, 1):
+        # Obtener asistencias del mes
+        asistencias = conn.execute('''
+            SELECT fecha, presente 
+            FROM asistencia 
+            WHERE id_alumno = ? 
+            AND strftime('%Y-%m', fecha) = ?
+        ''', (alumno['id'], f"{year}-{month:02d}")).fetchall()
         
-        # Formatear fecha
-        ultima_asistencia = alumno['ultima_asistencia']
-        if ultima_asistencia:
-            fecha = datetime.strptime(ultima_asistencia, '%Y-%m-%d')
-            ultima_asistencia = fecha.strftime('%d/%m/%Y')
-        else:
-            ultima_asistencia = 'Sin asistencias'
-
+        # Convertir a diccionario para fácil acceso
+        asistencias_dict = {a['fecha']: a['presente'] for a in asistencias}
+        
+        # Preparar fila con asistencias diarias
+        asistencias_row = []
+        for day in weekdays:
+            fecha = day.strftime('%Y-%m-%d')
+            if fecha in asistencias_dict:
+                asistencias_row.append('✓' if asistencias_dict[fecha] == 1 else '✗')
+            else:
+                asistencias_row.append('')
+        
+        # Agregar fila a la tabla con número de alumno (usando el índice)
         data.append([
-            alumno['nombre'],
-            str(alumno['presentes']),
-            str(alumno['total_dias']),
-            f"{porcentaje:.1f}%",
-            ultima_asistencia,
-            'Regular' if porcentaje >= 75 else 'En Riesgo' if porcentaje > 0 else 'No Asiste'
-        ])
+            str(i),  # Número correlativo
+            alumno['nombre'],  # Nombre
+        ] + asistencias_row)
 
-    # Calcular el ancho disponible para la tabla (página - márgenes)
-    available_width = letter[0] - doc.leftMargin - doc.rightMargin
-    col_widths = [
-        available_width * 0.30,  # Nombre 30%
-        available_width * 0.12,  # Días Presentes 12%
-        available_width * 0.12,  # Días Totales 12%
-        available_width * 0.15,  # % Asistencia 15%
-        available_width * 0.18,  # Última Asistencia 18%
-        available_width * 0.13   # Estado 13%
-    ]
+    # Crear PDF con ReportLab
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, 
+        pagesize=landscape(letter),
+        leftMargin=15,
+        rightMargin=15,
+        topMargin=20,
+        bottomMargin=20
+    )
+    elements = []
 
-    table = Table(data, colWidths=col_widths, repeatRows=1)
-    table_style = TableStyle([
-        # Estilo del encabezado
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#333333')),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-        ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 8),  # Encabezado más pequeño
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-        
-        # Estilo del contenido
-        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-        ('FONTSIZE', (0, 1), (-1, -1), 7),  # Contenido más pequeño
-        ('ALIGN', (0, 1), (0, -1), 'LEFT'),     # Nombres a la izquierda
-        ('ALIGN', (1, 1), (-1, -1), 'CENTER'),  # Resto centrado
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 0), (-1, -1), 4),    # Menos padding
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-        ('LEFTPADDING', (0, 0), (-1, -1), 4),   # Padding lateral
-        ('RIGHTPADDING', (0, 0), (-1, -1), 4),
-    ])
-    table.setStyle(table_style)
+    # Obtener estilos
+    styles = getSampleStyleSheet()
+    title_style = styles['Title']
+    normal_style = styles['Normal']
 
-    # Agregar colores según estado
-    for i in range(1, len(data)):
-        estado = data[i][-1]
-        if estado == 'Regular':
-            table.setStyle(TableStyle([
-                ('BACKGROUND', (0, i), (-1, i), colors.HexColor('#E8F5E9'))  # Verde claro
-            ]))
-        elif estado == 'En Riesgo':
-            table.setStyle(TableStyle([
-                ('BACKGROUND', (0, i), (-1, i), colors.HexColor('#FFEBEE'))  # Rojo claro
-            ]))
-        else:  # No Asiste
-            table.setStyle(TableStyle([
-                ('BACKGROUND', (0, i), (-1, i), colors.HexColor('#FAFAFA'))  # Gris muy claro
-            ]))
+    # Título y subtítulos
+    elements.append(Paragraph("CEIA Amigos del Padre Hurtado", title_style))
+    elements.append(Paragraph("La Serena", normal_style))
+    elements.append(Paragraph(f"Registro de Asistencia - {calendar.month_name[month]} {year}", normal_style))
+    elements.append(Spacer(1, 10))
+    elements.append(Paragraph(f"Curso: {curso['nombre']}", normal_style))
+    elements.append(Spacer(1, 10))
 
-    elements.append(table)
-    elements.append(Spacer(1, 40))
-
-    # Agregar línea de firma
-    elements.append(Paragraph("_" * 40, styles['Normal']))
-    elements.append(Paragraph("Inspectoría - Marcelo Munizaga", styles['Normal']))
-
-    # Construir el PDF
-    doc.build(elements)
+    # Crear tabla
+    # Encabezados con fechas
+    headers = ['N°', 'Alumno'] + [d.strftime('%d') for d in weekdays]
     
-    # Obtener el valor del buffer
+    # Estilo de la tabla
+    table_style = TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 8),  # Tamaño más pequeño
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+        ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
+        ('ALIGN', (0, 0), (0, -1), 'CENTER'),  # Centrar números
+        ('ALIGN', (1, 0), (1, -1), 'LEFT'),    # Alinear nombres a la izquierda
+        ('ALIGN', (2, 0), (-1, -1), 'CENTER'), # Centrar días
+        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+        ('FONTSIZE', (0, 1), (-1, -1), 8),     # Tamaño más pequeño
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
+        ('LEFTPADDING', (0, 0), (-1, -1), 2),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 2),
+    ])
+
+    # Crear y agregar tabla
+    # Calcular ancho de columnas
+    available_width = landscape(letter)[0] - 30  # 30 es la suma de márgenes izquierdo y derecho
+    col_widths = [20]  # N° alumno
+    col_widths.append(available_width * 0.3)  # Nombre (30% del espacio)
+    remaining_width = available_width * 0.7  # 70% restante para los días
+    day_width = remaining_width / len(weekdays)
+    col_widths.extend([day_width] * len(weekdays))
+
+    t = Table([headers] + data, colWidths=col_widths)
+    t.setStyle(table_style)
+    elements.append(t)
+
+    # Generar PDF
+    doc.build(elements)
     pdf = buffer.getvalue()
     buffer.close()
-    return pdf
 
-@app.route('/export_pdf/<int:curso_id>')
-@login_required
-def export_pdf(curso_id):
-    conn = get_db_connection()
-    curso = conn.execute('SELECT * FROM cursos WHERE id = ?', (curso_id,)).fetchone()
-    
-    # Obtener el mes actual o el especificado
-    month = request.args.get('month', type=int, default=date.today().month)
-    year = request.args.get('year', type=int, default=date.today().year)
-    mes_nombre = obtener_nombre_mes(month)
-    
-    pdf = generar_pdf(curso_id, month, year)
-    
-    conn.close()
     return send_file(
         BytesIO(pdf),
-        download_name=f'reporte_{curso["nombre"]}_{mes_nombre}_{year}.pdf',
-        as_attachment=True,
+        download_name=f'asistencia_{curso["nombre"]}_{calendar.month_name[month]}_{year}.pdf',
+        mimetype='application/pdf'
+    )
+
+@app.route('/exportar_pdf/<int:curso_id>')
+@login_required
+def exportar_pdf(curso_id):
+    conn = get_db_connection()
+    curso = conn.execute('SELECT nombre FROM cursos WHERE id = ?', (curso_id,)).fetchone()
+    
+    # Obtener mes y año de los parámetros o usar el actual
+    mes_actual = int(request.args.get('month', datetime.now().month))
+    año_actual = int(request.args.get('year', datetime.now().year))
+    
+    # Obtener días hábiles del mes (excluyendo sábados y domingos)
+    dias_habiles = []
+    num_dias = calendar.monthrange(año_actual, mes_actual)[1]
+    for dia in range(1, num_dias + 1):
+        fecha = date(año_actual, mes_actual, dia)
+        if fecha.weekday() < 5:  # 0-4 son Lunes a Viernes
+            dias_habiles.append(fecha)
+    
+    total_dias_habiles = len(dias_habiles)
+    
+    # Obtener datos de alumnos
+    alumnos = conn.execute('''
+        SELECT id, nombre 
+        FROM alumnos 
+        WHERE id_curso = ? 
+        ORDER BY nombre
+    ''', (curso_id,)).fetchall()
+
+    # Preparar datos para el PDF
+    data = []
+    for i, alumno in enumerate(alumnos, 1):
+        # Obtener asistencias del mes para este alumno
+        asistencias = conn.execute('''
+            SELECT DISTINCT fecha 
+            FROM asistencia 
+            WHERE id_alumno = ? 
+            AND strftime('%Y-%m', fecha) = ?
+            AND presente = 1
+            GROUP BY fecha
+        ''', (alumno['id'], f"{año_actual}-{mes_actual:02d}")).fetchall()
+        
+        # Obtener la última asistencia del alumno
+        ultima_asistencia = conn.execute('''
+            SELECT fecha 
+            FROM asistencia 
+            WHERE id_alumno = ? 
+            AND presente = 1 
+            ORDER BY fecha DESC LIMIT 1
+        ''', (alumno['id'],)).fetchone()
+        
+        # Contar días presentes
+        dias_presentes = len(asistencias)
+        
+        # Calcular porcentaje
+        porcentaje = (dias_presentes / total_dias_habiles * 100) if total_dias_habiles > 0 else 0
+        
+        # Agregar fila a la tabla
+        data.append([
+            str(i),  # Número correlativo
+            alumno['nombre'],
+            str(dias_presentes),
+            str(total_dias_habiles),
+            f"{porcentaje:.1f}%",
+            ultima_asistencia['fecha'] if ultima_asistencia else 'Sin asistencias',
+            'Regular' if porcentaje >= 50 else 'En Riesgo' if porcentaje >= 25 else 'No Asiste'
+        ])
+
+    # Crear PDF con ReportLab
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter)
+    elements = []
+
+    # Obtener estilos
+    styles = getSampleStyleSheet()
+    title_style = styles['Title']
+    normal_style = styles['Normal']
+    heading_style = styles['Heading1']
+
+    # Agregar logo y encabezado
+    logo_path = os.path.join(app.root_path, 'static', 'logo.png')
+    if os.path.exists(logo_path):
+        img = Image(logo_path, width=60, height=60)
+        elements.append(img)
+
+    # Título y subtítulos
+    elements.append(Paragraph("CEIA Amigos del Padre Hurtado", title_style))
+    elements.append(Paragraph("La Serena", normal_style))
+    elements.append(Paragraph(f"Reporte de Asistencia - {calendar.month_name[mes_actual]} {año_actual}", normal_style))
+    elements.append(Spacer(1, 20))
+    elements.append(Paragraph(f"Curso: {curso['nombre']}", heading_style))
+    elements.append(Spacer(1, 20))
+
+    # Crear tabla
+    table_style = TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 11),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+        ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
+        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+        ('FONTSIZE', (0, 1), (-1, -1), 9),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black),
+        ('LEFTPADDING', (0, 0), (-1, -1), 5),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+    ])
+
+    # Colorear filas según estado
+    for i in range(len(data)):
+        if data[i][-1] == 'Regular':
+            table_style.add('BACKGROUND', (0, i+1), (-1, i+1), colors.lightgreen)
+        elif data[i][-1] == 'En Riesgo':
+            table_style.add('BACKGROUND', (0, i+1), (-1, i+1), colors.lightgoldenrodyellow)
+        else:  # No Asiste
+            table_style.add('BACKGROUND', (0, i+1), (-1, i+1), colors.lightcoral)
+
+    # Crear y agregar tabla
+    headers = ['N°', 'Alumno', 'Días\nPresentes', 'Días\nTotales', '% Asistencia', 'Última\nAsistencia', 'Estado']
+    t = Table([headers] + data)
+    t.setStyle(table_style)
+    elements.append(t)
+
+    # Generar PDF
+    doc.build(elements)
+    pdf = buffer.getvalue()
+    buffer.close()
+
+    return send_file(
+        BytesIO(pdf),
+        download_name=f'reporte_{curso["nombre"]}_{calendar.month_name[mes_actual]}_{año_actual}.pdf',
+        mimetype='application/pdf'
+    )
+
+@app.route('/exportar_lista/<int:curso_id>')
+@login_required
+def exportar_lista(curso_id):
+    # Obtener mes y año de los parámetros o usar el actual
+    mes_actual = int(request.args.get('month', datetime.now().month))
+    año_actual = int(request.args.get('year', datetime.now().year))
+    
+    conn = get_db_connection()
+    curso = conn.execute('SELECT nombre FROM cursos WHERE id = ?', (curso_id,)).fetchone()
+    
+    # Obtener alumnos
+    alumnos = conn.execute('''
+        SELECT nombre 
+        FROM alumnos 
+        WHERE id_curso = ? 
+        ORDER BY nombre
+    ''', (curso_id,)).fetchall()
+    
+    # Nombres de meses en español
+    meses = {
+        1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril',
+        5: 'Mayo', 6: 'Junio', 7: 'Julio', 8: 'Agosto',
+        9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre'
+    }
+    
+    # Obtener todos los días del mes (excepto sábados y domingos)
+    dias_mes = []
+    num_dias = calendar.monthrange(año_actual, mes_actual)[1]
+    for dia in range(1, num_dias + 1):
+        fecha = date(año_actual, mes_actual, dia)
+        if fecha.weekday() < 5:  # 0-4 son Lunes a Viernes
+            dias_mes.append(fecha)
+    
+    # Dividir alumnos en dos grupos para dos páginas
+    mitad = len(alumnos) // 2 + len(alumnos) % 2  # Asegura que la primera página tenga más si es impar
+    alumnos_pagina1 = alumnos[:mitad]
+    alumnos_pagina2 = alumnos[mitad:]
+    
+    # Crear PDF con ReportLab
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=landscape(letter))
+    elements = []
+
+    # Obtener estilos
+    styles = getSampleStyleSheet()
+    title_style = styles['Title']
+    title_style.fontSize = 14
+    normal_style = styles['Normal']
+    normal_style.fontSize = 8
+
+    def crear_tabla_alumnos(alumnos_grupo, inicio_numeracion):
+        # Crear tabla
+        data = []
+        # Encabezados con números de días
+        headers = ['N°', 'Nombre'] + [str(dia.day) for dia in dias_mes]
+        
+        # Agregar filas con números y nombres
+        for i, alumno in enumerate(alumnos_grupo, inicio_numeracion):
+            row = [str(i), alumno['nombre']] + [''] * len(dias_mes)
+            data.append(row)
+
+        # Crear tabla
+        # Encabezados con números de días
+        headers = ['N°', 'Nombre'] + [str(dia.day) for dia in dias_mes]
+        
+        # Estilo de la tabla
+        table_style = TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+            ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
+            ('ALIGN', (0, 0), (0, -1), 'CENTER'),  # Centrar números
+            ('ALIGN', (1, 0), (1, -1), 'LEFT'),    # Alinear nombres a la izquierda
+            ('ALIGN', (2, 0), (-1, -1), 'CENTER'), # Centrar días
+            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 1), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('LEFTPADDING', (0, 0), (-1, -1), 1),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 1),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ])
+
+        # Calcular anchos de columna
+        available_width = 750  # Ancho aproximado en landscape
+        num_width = 20
+        name_width = 150
+        day_width = (available_width - num_width - name_width) / len(dias_mes)
+        
+        # Crear y agregar tabla
+        t = Table([headers] + data, colWidths=[num_width, name_width] + [day_width] * len(dias_mes))
+        t.setStyle(table_style)
+        return t
+
+    # Primera página
+    elements.append(Paragraph("CEIA Amigos del Padre Hurtado", title_style))
+    elements.append(Paragraph("La Serena", normal_style))
+    elements.append(Paragraph(f"Lista de Asistencia - {curso['nombre']} - {meses[mes_actual]} {año_actual}", normal_style))
+    elements.append(Spacer(1, 10))
+    elements.append(crear_tabla_alumnos(alumnos_pagina1, 1))
+    
+    # Si hay alumnos para la segunda página
+    if alumnos_pagina2:
+        elements.append(PageBreak())
+        elements.append(Paragraph("CEIA Amigos del Padre Hurtado", title_style))
+        elements.append(Paragraph("La Serena", normal_style))
+        elements.append(Paragraph(f"Lista de Asistencia - {curso['nombre']} - {meses[mes_actual]} {año_actual} (continuación)", normal_style))
+        elements.append(Spacer(1, 10))
+        elements.append(crear_tabla_alumnos(alumnos_pagina2, len(alumnos_pagina1) + 1))
+
+    # Generar PDF
+    doc.build(elements)
+    pdf = buffer.getvalue()
+    buffer.close()
+
+    return send_file(
+        BytesIO(pdf),
+        download_name=f'lista_{curso["nombre"]}_{meses[mes_actual]}_{año_actual}.pdf',
         mimetype='application/pdf'
     )
 

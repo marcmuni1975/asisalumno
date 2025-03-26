@@ -85,7 +85,7 @@
             <div class="col-md-3">
                 <div class="card stat-card shadow">
                     <div class="card-body text-center">
-                        <a href="{{ url_for('export_pdf', curso_id=curso.id) }}" class="btn btn-success">
+                        <a href="{{ url_for('exportar_pdf', curso_id=curso.id, month=mes_actual, year=año_actual) }}" class="btn btn-success">
                             Exportar PDF
                         </a>
                     </div>
@@ -95,19 +95,41 @@
 
         <!-- Leyenda -->
         <div class="mb-3 text-center">
-            <div class="legend-item legend-regular">Regular (≥75%)</div>
-            <div class="legend-item legend-riesgo">En Riesgo (1-74%)</div>
-            <div class="legend-item legend-no-asiste">No Asiste (0%)</div>
+            <div class="legend-item legend-regular">Regular (≥50%)</div>
+            <div class="legend-item legend-riesgo">En Riesgo (25-49%)</div>
+            <div class="legend-item legend-no-asiste">No Asiste (<25%)</div>
         </div>
 
         <!-- Filtros -->
-        <div class="row mb-3">
+        <div class="row mb-4">
+            <div class="col-auto">
+                <form class="d-flex align-items-center" method="GET">
+                    <select name="month" class="form-select me-2" onchange="this.form.submit()">
+                        {% for num, nombre in meses.items() %}
+                        <option value="{{ num }}" {% if num == mes_actual %}selected{% endif %}>{{ nombre }}</option>
+                        {% endfor %}
+                    </select>
+                    <select name="year" class="form-select me-2" onchange="this.form.submit()">
+                        {% for y in range(año_actual-1, año_actual+2) %}
+                        <option value="{{ y }}" {% if y == año_actual %}selected{% endif %}>{{ y }}</option>
+                        {% endfor %}
+                    </select>
+                </form>
+            </div>
             <div class="col">
                 <div class="btn-group" role="group">
                     <button type="button" class="btn btn-outline-primary active" data-filter="todos">Todos</button>
-                    <button type="button" class="btn btn-outline-warning" data-filter="riesgo">Baja Asistencia (<75%)</button>
+                    <button type="button" class="btn btn-outline-warning" data-filter="riesgo">Baja Asistencia (<50%)</button>
                     <button type="button" class="btn btn-outline-danger" data-filter="no-asiste">No Asisten</button>
                 </div>
+            </div>
+            <div class="col text-end">
+                <a href="{{ url_for('exportar_pdf', curso_id=curso.id, month=mes_actual, year=año_actual) }}" class="btn btn-primary">
+                    <i class="bi bi-file-pdf"></i> Exportar Asistencia
+                </a>
+                <a href="{{ url_for('exportar_lista', curso_id=curso.id, month=mes_actual, year=año_actual) }}" class="btn btn-secondary">
+                    <i class="bi bi-file-text"></i> Lista para Imprimir
+                </a>
             </div>
         </div>
 
@@ -127,7 +149,7 @@
                 </thead>
                 <tbody>
                     {% for alumno in alumnos_data %}
-                    <tr class="{% if alumno.porcentaje >= 75 %}regular{% elif alumno.porcentaje > 0 %}riesgo{% else %}no-asiste{% endif %}">
+                    <tr class="{% if alumno.porcentaje >= 50 %}regular{% elif alumno.porcentaje > 0 %}riesgo{% else %}no-asiste{% endif %}">
                         <td>{{ loop.index }}</td>
                         <td>{{ alumno.nombre }}</td>
                         <td>{{ alumno.dias_presentes }}</td>
