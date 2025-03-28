@@ -769,86 +769,86 @@ def exportar_lista(curso_id):
         if fecha.weekday() < 5:  # 0-4 son Lunes a Viernes
             dias_mes.append(fecha)
     
-    # Dividir alumnos en dos grupos para dos páginas
-    mitad = len(alumnos) // 2 + len(alumnos) % 2  # Asegura que la primera página tenga más si es impar
-    alumnos_pagina1 = alumnos[:mitad]
-    alumnos_pagina2 = alumnos[mitad:]
-    
     # Crear PDF con ReportLab
     buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=landscape(letter))
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=landscape(letter),
+        leftMargin=20,
+        rightMargin=20,
+        topMargin=30,
+        bottomMargin=30
+    )
     elements = []
 
     # Obtener estilos
     styles = getSampleStyleSheet()
-    title_style = styles['Title']
-    title_style.fontSize = 14
-    normal_style = styles['Normal']
-    normal_style.fontSize = 8
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Title'],
+        fontSize=16,
+        spaceAfter=6,
+        alignment=1  # Centrado
+    )
+    normal_style = ParagraphStyle(
+        'CustomNormal',
+        parent=styles['Normal'],
+        fontSize=10,
+        spaceAfter=3,
+        alignment=1  # Centrado
+    )
 
-    def crear_tabla_alumnos(alumnos_grupo, inicio_numeracion):
-        # Crear tabla
-        data = []
-        # Encabezados con números de días
-        headers = ['N°', 'Nombre'] + [str(dia.day) for dia in dias_mes]
-        
-        # Agregar filas con números y nombres
-        for i, alumno in enumerate(alumnos_grupo, inicio_numeracion):
-            row = [str(i), alumno['nombre']] + [''] * len(dias_mes)
-            data.append(row)
+    # Crear tabla
+    data = []
+    # Encabezados con números de días
+    headers = ['N°', 'Nombre'] + [str(dia.day) for dia in dias_mes]
+    data.append(headers)
+    
+    # Agregar filas con números y nombres
+    for i, alumno in enumerate(alumnos, 1):
+        row = [str(i), alumno['nombre']] + [''] * len(dias_mes)
+        data.append(row)
 
-        # Crear tabla
-        # Encabezados con números de días
-        headers = ['N°', 'Nombre'] + [str(dia.day) for dia in dias_mes]
-        
-        # Estilo de la tabla
-        table_style = TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 8),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-            ('BACKGROUND', (0, 1), (-1, -1), colors.white),
-            ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
-            ('ALIGN', (0, 0), (0, -1), 'CENTER'),  # Centrar números
-            ('ALIGN', (1, 0), (1, -1), 'LEFT'),    # Alinear nombres a la izquierda
-            ('ALIGN', (2, 0), (-1, -1), 'CENTER'), # Centrar días
-            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-            ('FONTSIZE', (0, 1), (-1, -1), 8),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black),
-            ('LEFTPADDING', (0, 0), (-1, -1), 1),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 1),
-            ('TOPPADDING', (0, 0), (-1, -1), 4),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-        ])
+    # Calcular anchos de columna
+    available_width = landscape(letter)[0] - 40  # 40 es la suma de márgenes
+    num_width = 25  # Ancho para el número
+    name_width = available_width * 0.3  # 30% para el nombre
+    remaining_width = available_width - (num_width + name_width)
+    day_width = remaining_width / len(dias_mes)  # El resto distribuido entre los días
 
-        # Calcular anchos de columna
-        available_width = 750  # Ancho aproximado en landscape
-        num_width = 20
-        name_width = 150
-        day_width = (available_width - num_width - name_width) / len(dias_mes)
-        
-        # Crear y agregar tabla
-        t = Table([headers] + data, colWidths=[num_width, name_width] + [day_width] * len(dias_mes))
-        t.setStyle(table_style)
-        return t
+    # Crear tabla con los anchos calculados
+    t = Table(data, colWidths=[num_width, name_width] + [day_width] * len(dias_mes))
+    
+    # Estilo de la tabla
+    table_style = TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 10),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 5),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+        ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
+        ('ALIGN', (0, 0), (0, -1), 'CENTER'),  # Centrar números
+        ('ALIGN', (1, 0), (1, -1), 'LEFT'),    # Alinear nombres a la izquierda
+        ('ALIGN', (2, 0), (-1, -1), 'CENTER'), # Centrar días
+        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+        ('FONTSIZE', (0, 1), (-1, -1), 9),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
+        ('LEFTPADDING', (0, 0), (-1, -1), 3),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 3),
+        ('TOPPADDING', (0, 0), (-1, -1), 3),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+    ])
+    t.setStyle(table_style)
 
-    # Primera página
+    # Título y encabezados
     elements.append(Paragraph("CEIA Amigos del Padre Hurtado", title_style))
     elements.append(Paragraph("La Serena", normal_style))
-    elements.append(Paragraph(f"Lista de Asistencia - {curso['nombre']} - {meses[mes_actual]} {año_actual}", normal_style))
+    elements.append(Paragraph(f"Lista de Asistencia - {meses[mes_actual]} {año_actual}", normal_style))
+    elements.append(Paragraph(f"Curso: {curso['nombre']}", normal_style))
     elements.append(Spacer(1, 10))
-    elements.append(crear_tabla_alumnos(alumnos_pagina1, 1))
-    
-    # Si hay alumnos para la segunda página
-    if alumnos_pagina2:
-        elements.append(PageBreak())
-        elements.append(Paragraph("CEIA Amigos del Padre Hurtado", title_style))
-        elements.append(Paragraph("La Serena", normal_style))
-        elements.append(Paragraph(f"Lista de Asistencia - {curso['nombre']} - {meses[mes_actual]} {año_actual} (continuación)", normal_style))
-        elements.append(Spacer(1, 10))
-        elements.append(crear_tabla_alumnos(alumnos_pagina2, len(alumnos_pagina1) + 1))
+    elements.append(t)
 
     # Generar PDF
     doc.build(elements)
