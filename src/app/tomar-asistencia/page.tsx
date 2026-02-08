@@ -1,40 +1,74 @@
 'use client';
 
-import { useState } from 'react';
-import { ArrowLeft, Save, Check, X, Clock } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { ArrowLeft, Save, Check, X, Clock, Loader2 } from 'lucide-react';
 import Link from 'next/link';
-
-// Mock data inicial
-const STUDENTS_MOCK = [
-    { id: 1, name: 'Alvarado, Juan' },
-    { id: 2, name: 'Berríos, María' },
-    { id: 3, name: 'Castro, Pedro' },
-    { id: 4, name: 'Díaz, Ana' },
-    { id: 5, name: 'Escobar, Luis' },
-    { id: 6, name: 'Fernández, Sofía' },
-    { id: 7, name: 'González, Diego' },
-    { id: 8, name: 'Herrera, Camila' },
-];
+import { getStudents, saveAttendance } from './actions';
 
 type AttendanceStatus = 'present' | 'absent' | 'late';
 
+// Definir tipo para Alumno que viene de DB
+interface Student {
+    id: number;
+    name: string;
+    course: string;
+}
+
 export default function AttendancePage() {
     const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
-    const [attendance, setAttendance] = useState<Record<number, AttendanceStatus>>(() => {
-        // Inicializar todos como presentes
-        const initial: Record<number, AttendanceStatus> = {};
-        STUDENTS_MOCK.forEach(s => initial[s.id] = 'present');
-        return initial;
-    });
+    const [students, setStudents] = useState<Student[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [saving, setSaving] = useState(false);
+    const [attendance, setAttendance] = useState<Record<number, AttendanceStatus>>({});
+
+    // Cargar alumnos al iniciar
+    useEffect(() => {
+        async function loadData() {
+            try {
+                const data = await getStudents();
+                setStudents(data as Student[]);
+
+                // Inicializar asistencia
+                const initial: Record<number, AttendanceStatus> = {};
+                data.forEach((s: any) => initial[s.id] = 'present');
+                setAttendance(initial);
+            } catch (error) {
+                console.error("Error loading students:", error);
+            } finally {
+                setLoading(false);
+            }
+        }
+        loadData();
+    }, []);
 
     const handleStatusChange = (id: number, status: AttendanceStatus) => {
         setAttendance(prev => ({ ...prev, [id]: status }));
     };
 
-    const handleSave = () => {
-        alert(`Guardando asistencia del ${date}:\n` + JSON.stringify(attendance, null, 2));
-        // Aquí iría la llamada a la API
+    const handleSave = async () => {
+        setSaving(true);
+        try {
+            const result = await saveAttendance(date, attendance);
+            if (result.success) {
+                alert('¡Asistencia guardada correctamente!');
+            } else {
+                alert('Error al guardar: ' + result.message);
+            }
+        } catch (e) {
+            alert('Error inesperado al guardar');
+        } finally {
+            setSaving(false);
+        }
     };
+
+    if (loading) {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
+                <Loader2 className="animate-spin text-blue-600" size={48} />
+                <span className="ml-3 text-gray-500">Cargando curso...</span>
+            </div>
+        );
+    }
 
     return (
         <div className="min-h-screen bg-gray-50 dark:bg-gray-900 p-4 md:p-8">
@@ -46,7 +80,7 @@ export default function AttendancePage() {
                     </Link>
                     <div>
                         <h1 className="text-2xl font-bold">Tomar Asistencia</h1>
-                        <p className="text-sm text-gray-500">Curso: 1° Medio A</p>
+                        <p className="text-sm text-gray-500">Curso: 1° Medio A (Base de Datos)</p>
                     </div>
                 </div>
 
@@ -59,10 +93,11 @@ export default function AttendancePage() {
                     />
                     <button
                         onClick={handleSave}
-                        className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center gap-2 shadow-sm"
+                        disabled={saving}
+                        className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center gap-2 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                        <Save size={18} />
-                        Guardar
+                        {saving ? <Loader2 className="animate-spin" size={18} /> : <Save size={18} />}
+                        {saving ? 'Guardando...' : 'Guardar'}
                     </button>
                 </div>
             </header>
@@ -79,7 +114,7 @@ export default function AttendancePage() {
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
-                            {STUDENTS_MOCK.map((student, index) => (
+                            {students.map((student, index) => (
                                 <tr key={student.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
                                     <td className="p-4 text-gray-500">{index + 1}</td>
                                     <td className="p-4 font-medium">{student.name}</td>
@@ -119,6 +154,13 @@ export default function AttendancePage() {
                                     </td>
                                 </tr>
                             ))}
+                            {students.length === 0 && (
+                                <tr>
+                                    <td colSpan={3} className="p-8 text-center text-gray-500">
+                                        No se encontraron alumnos en la base de datos.
+                                    </td>
+                                </tr>
+                            )}
                         </tbody>
                     </table>
                 </div>
